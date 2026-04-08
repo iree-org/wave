@@ -28,7 +28,8 @@ if __name__ == "__main__":
         sys.path.append(_current_dir)
 
 from attr_type_converter import (
-    convert_index_mapping_array_to_sympy,
+    convert_index_mapping_dict_to_sympy,
+    convert_mma_index_to_sympy,
     dtype_to_mlir_scalar_type,
     get_operand_symbol_placeholders,
     preprocess_symbols,
@@ -1738,13 +1739,22 @@ def _build_response(
                     ), f"Index already set for water id {attribute.value}."
                     assert "index" in op.attributes, f"Index not inferred for {op}."
 
-                    inferred_attributes[attribute.value].update(
-                        {
-                            "index": convert_index_mapping_array_to_sympy(
-                                op, op.attributes["index"], element
-                            )
-                        }
-                    )
+                    index_array = op.attributes["index"]
+                    if isinstance(op.opview, MmaOp):
+                        index = convert_mma_index_to_sympy(index_array)
+                    elif isinstance(op.opview, ScaledMmaOp):
+                        index = convert_mma_index_to_sympy(
+                            index_array, has_scale_operands=True
+                        )
+                    else:
+                        assert element < len(index_array), (
+                            f"index element {element} out of range for "
+                            f"{op.name} with {len(index_array)} entries"
+                        )
+                        index = convert_index_mapping_dict_to_sympy(
+                            index_array[element]
+                        )
+                    inferred_attributes[attribute.value].update({"index": index})
 
                 if attribute is not None:
                     record_index(attribute, inferred_attributes)

@@ -38,6 +38,7 @@ try:
         AddOp,
         AllocateOp,
         ApplyExprOp,
+        BitcastOp,
         BroadcastOp,
         CastOp,
         DivOp,
@@ -50,6 +51,7 @@ try:
         MinOp,
         MmaOp,
         MulOp,
+        ScaledMmaOp,
         PermuteOp,
         ReadOp,
         ReciprocalOp,
@@ -110,6 +112,7 @@ from wave_lang.kernel.ops.wave_ops import (
     Add,
     Allocate,
     ApplyExpr,
+    BitcastOp as Bitcast,
     Broadcast,
     CastOp as Cast,
     Exp2,
@@ -124,6 +127,7 @@ from wave_lang.kernel.ops.wave_ops import (
     MMA,
     MMABase,
     Mul,
+    ScaledMMA,
     NewRegister,
     Output,
     Permute,
@@ -144,7 +148,8 @@ from wave_lang.kernel.ops.wave_ops import (
 from wave_lang.kernel.wave.utils.classes import ShuffleMode
 from attr_type_converter import (
     OPERAND_SYMBOL_NAME_WAVE_PREFIX,
-    convert_index_mapping_array_to_sympy,
+    convert_index_mapping_dict_to_sympy,
+    convert_mma_index_to_sympy,
     expr_list_attr_to_exprs,
     mlir_element_type_to_dtype,
     symbol_attr_to_name,
@@ -229,7 +234,7 @@ def _convert_wave_tensor_type(
 ) -> type[Memory] | type[Register]:
     """Converts a WaveTensorType to Memory or Register, dispatching on address space."""
     dims: list[IndexExpr | int] = [
-        index_symbol(symbol_attr_to_name(attr)) for attr in type_.shape
+        _resolve_dim(symbol_attr_to_name(attr), parse_ctx) for attr in type_.shape
     ]
     dtype = mlir_element_type_to_dtype(type_.element_type)
     if type_.address_space.value == wave.WaveAddressSpace.Register:
@@ -276,6 +281,7 @@ def _convert_mapping_attr(
     mapping_attr: WaveExprListAttr,
     memory_type: WaveTensorType,
     value_type: WaveTensorType,
+    parse_ctx: _OpParseContext,
     *,
     is_read: bool,
 ) -> IndexMapping | None:
@@ -310,8 +316,12 @@ def _convert_mapping_attr(
     for i, j in enumerate(inverse_perm):
         perm[j] = i
 
-    memory_dims = [index_symbol(symbol_attr_to_name(s)) for s in memory_type.shape]
-    value_dims = [index_symbol(symbol_attr_to_name(s)) for s in value_type.shape]
+    memory_dims = [
+        _resolve_dim(symbol_attr_to_name(s), parse_ctx) for s in memory_type.shape
+    ]
+    value_dims = [
+        _resolve_dim(symbol_attr_to_name(s), parse_ctx) for s in value_type.shape
+    ]
 
     sym_to_iter = {memory_dims[i]: IndexMapping.iterator(perm[i]) for i in range(n)}
 
@@ -360,13 +370,16 @@ def _convert_vector_shapes(
 
 
 def _convert_supported_attrs(
-    op: ir.OpView, ignore_attrs: set[str] | None = None
+    op: ir.OpView,
+    ignore_attrs: set[str] | None = None,
+    parse_ctx: _OpParseContext | None = None,
 ) -> dict[str, AttrValue]:
     """Converts supported MLIR attributes of an operation into Python objects.
 
     Args:
         op: MLIR operation (OpView subclass)
         ignore_attrs: Set of attribute names to skip
+        parse_ctx: Parsing context with derived_dims for dimension remapping
 
     Returns:
         Dictionary mapping attribute names to converted Python values:
@@ -380,10 +393,18 @@ def _convert_supported_attrs(
     attrs = op.attributes
     ignore_attrs = ignore_attrs or set()
     # Only allow attributes we can faithfully convert.
+    derived_dims = parse_ctx.derived_dims if parse_ctx else None
+
+    def _convert_non_mma_index(array_attr: ir.ArrayAttr):
+        """Non-MMA ops have a single-element index array. MMA/ScaledMMA
+        exclude this attr via ignore_attrs and convert separately."""
+        assert (
+            len(array_attr) == 1
+        ), f"Expected single index mapping for {op.name}, got {len(array_attr)}"
+        return convert_index_mapping_dict_to_sympy(array_attr[0], derived_dims)
+
     converters = {
-        AttrNames.INDEX.mlir_name: lambda a: convert_index_mapping_array_to_sympy(
-            op, a
-        ),
+        AttrNames.INDEX.mlir_name: _convert_non_mma_index,
         AttrNames.BOUNDS.mlir_name: _convert_read_write_bounds,
         AttrNames.ELEMENTS_PER_THREAD.mlir_name: lambda a: int(a.value),
         AttrNames.KIND.mlir_name: _convert_mma_kind,
@@ -669,6 +690,7 @@ class _OpParseContext:
     default_mma_type: MMAType | ScaledMMAType | None = None
     value_map: dict[ir.Value, fx.Node | int | float] = field(default_factory=dict)
     unspecified_addr_counter: itertools.count = field(default_factory=itertools.count)
+    derived_dims: dict[str, IndexExpr] = field(default_factory=dict)
 
     def resolve_operand(self, value: ir.Value) -> fx.Node | int | float:
         """Resolve MLIR value to its corresponding FX node or scalar."""
@@ -684,6 +706,13 @@ class _OpParseContext:
         self.value_map[mlir_value] = fx_node
 
 
+def _resolve_dim(name: str, parse_ctx: _OpParseContext) -> IndexExpr:
+    """Resolve a dimension name to a sympy expression, using derived_dims if available."""
+    if name in parse_ctx.derived_dims:
+        return parse_ctx.derived_dims[name]
+    return index_symbol(name)
+
+
 def _handle_constant_op(op: arith.ConstantOp, parse_ctx: _OpParseContext) -> None:
     """Handle arith.constant operation."""
     value = op.attributes[AttrNames.VALUE.mlir_name].value
@@ -694,9 +723,11 @@ def _handle_register_op(op: RegisterOp, parse_ctx: _OpParseContext) -> None:
     """Handle wave.register operation."""
     init_value = parse_ctx.resolve_operand(op.init)
     result_type = op.result.type
-    dims = tuple(index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape)
+    dims = tuple(
+        _resolve_dim(symbol_attr_to_name(attr), parse_ctx) for attr in result_type.shape
+    )
     dtype = mlir_element_type_to_dtype(result_type.element_type)
-    converted_attrs = _convert_supported_attrs(op)
+    converted_attrs = _convert_supported_attrs(op, parse_ctx=parse_ctx)
 
     register_op = NewRegister.create(
         parse_ctx.graph,
@@ -714,10 +745,10 @@ def _handle_broadcast_op(op: BroadcastOp, parse_ctx: _OpParseContext) -> None:
     source_node = parse_ctx.resolve_operand(op.source)
     result_type = op.result.type
     target_shape = tuple(
-        index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape
+        _resolve_dim(symbol_attr_to_name(attr), parse_ctx) for attr in result_type.shape
     )
     dtype = mlir_element_type_to_dtype(result_type.element_type)
-    converted_attrs = _convert_supported_attrs(op)
+    converted_attrs = _convert_supported_attrs(op, parse_ctx=parse_ctx)
 
     broadcast_op = Broadcast.create(
         parse_ctx.graph,
@@ -744,7 +775,9 @@ def _handle_lds_barrier_op(op: amdgpu.LDSBarrierOp, parse_ctx: _OpParseContext) 
 def _handle_allocate_op(op: AllocateOp, parse_ctx: _OpParseContext) -> None:
     """Handle wave.allocate operation."""
     result_type = op.result.type
-    shape = tuple(index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape)
+    shape = tuple(
+        _resolve_dim(symbol_attr_to_name(attr), parse_ctx) for attr in result_type.shape
+    )
     dtype = mlir_element_type_to_dtype(result_type.element_type)
 
     if result_type.address_space.value == wave.WaveAddressSpace.Register:
@@ -772,6 +805,7 @@ def _handle_allocate_op(op: AllocateOp, parse_ctx: _OpParseContext) -> None:
     converted_attrs = _convert_supported_attrs(
         op,
         ignore_attrs={"distributed_shape", "offset", "padding", "tail_padding"},
+        parse_ctx=parse_ctx,
     )
 
     allocate_op = Allocate.create(
@@ -796,6 +830,7 @@ def _handle_read_op(op: ReadOp, parse_ctx: _OpParseContext) -> None:
     converted_attrs = _convert_supported_attrs(
         op,
         ignore_attrs={AttrNames.MAPPING.mlir_name},
+        parse_ctx=parse_ctx,
     )
 
     mapping = None
@@ -804,6 +839,7 @@ def _handle_read_op(op: ReadOp, parse_ctx: _OpParseContext) -> None:
             op.attributes[AttrNames.MAPPING.mlir_name],
             op.memory.type,
             op.result.type,
+            parse_ctx,
             is_read=True,
         )
 
@@ -828,6 +864,7 @@ def _handle_write_op(op: WriteOp, parse_ctx: _OpParseContext) -> None:
     converted_attrs = _convert_supported_attrs(
         op,
         ignore_attrs={AttrNames.MAPPING.mlir_name},
+        parse_ctx=parse_ctx,
     )
 
     mapping = None
@@ -836,6 +873,7 @@ def _handle_write_op(op: WriteOp, parse_ctx: _OpParseContext) -> None:
             op.attributes[AttrNames.MAPPING.mlir_name],
             op.memory.type,
             op.value_to_store.type,
+            parse_ctx,
             is_read=False,
         )
 
@@ -859,64 +897,112 @@ def _handle_write_op(op: WriteOp, parse_ctx: _OpParseContext) -> None:
     # No mapping added because write produces no SSA results.
 
 
-def _handle_mma_op(op: MmaOp, parse_ctx: _OpParseContext) -> None:
-    """Handle wave.mma operation."""
-    lhs_node = parse_ctx.resolve_operand(op.lhs)
-    rhs_node = parse_ctx.resolve_operand(op.rhs)
-    acc_node = parse_ctx.resolve_operand(op.accumulator)
-    converted_attrs = _convert_supported_attrs(op)
-    mma_type = converted_attrs.pop(AttrNames.KIND.mlir_name, None)
-
-    # Pop vector_shapes before _apply_mlir_attrs_to_fx_node (which
-    # expects single-entry lists).  MMA carries [lhs, rhs, acc, result].
-    vector_shape_entries = converted_attrs.pop(AttrNames.VECTOR_SHAPES.mlir_name, None)
-
-    mma_op = MMA.create(
-        parse_ctx.graph,
-        lhs=lhs_node,
-        rhs=rhs_node,
-        acc=acc_node,
-        mma_type=mma_type,
-        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
-    )
-
-    _apply_mlir_attrs_to_fx_node(mma_op.fx_node, converted_attrs)
-
-    if vector_shape_entries is not None:
-        assert len(vector_shape_entries) == 4, (
-            f"MMA vector_shape must have 4 entries "
-            f"(lhs, rhs, acc, result), got {len(vector_shape_entries)}"
+def _check_operand_vector_shapes(
+    op_name: str,
+    label: str,
+    node: fx.Node,
+    expected: dict[IndexSymbol, int] | None,
+) -> None:
+    """Verify that an operand's vector_shapes match the MLIR attribute."""
+    actual = getattr(node, "vector_shapes", None)
+    if expected is not None and actual != expected:
+        raise ValueError(
+            f"{op_name} {label} vector_shapes mismatch: "
+            f"operand has {actual}, MLIR attr has {expected}"
         )
-        lhs_vs, rhs_vs, acc_vs, result_vs = vector_shape_entries
 
-        def _check_operand_vector_shapes(
-            label: str, node: fx.Node, expected: dict[IndexSymbol, int] | None
-        ):
-            actual = getattr(node, "vector_shapes", None)
-            if expected is not None and actual != expected:
-                raise ValueError(
-                    f"MMA {label} vector_shapes mismatch: "
-                    f"operand has {actual}, MLIR attr has {expected}"
-                )
 
-        _check_operand_vector_shapes("lhs", lhs_node, lhs_vs)
-        _check_operand_vector_shapes("rhs", rhs_node, rhs_vs)
-        _check_operand_vector_shapes("acc", acc_node, acc_vs)
-
-        if result_vs is not None:
-            mma_op.fx_node.vector_shapes = result_vs
-
-    # Derive reduction_dim: the dimension shared by lhs and rhs but absent from acc.
+def _set_reduction_dim(
+    fx_node: fx.Node,
+    lhs_node: fx.Node,
+    rhs_node: fx.Node,
+    acc_node: fx.Node,
+    op_name: str,
+) -> None:
+    """Derive and set reduction_dim from lhs/rhs/acc shapes."""
     lhs_shape = get_custom(lhs_node).type.symbolic_shape
     rhs_shape = get_custom(rhs_node).type.symbolic_shape
     acc_shape = get_custom(acc_node).type.symbolic_shape
     reduction_dim = (set(lhs_shape) & set(rhs_shape)) - set(acc_shape)
     assert (
         len(reduction_dim) == 1
-    ), f"Expected exactly one reduction dimension for MMA, got {reduction_dim}"
-    mma_op.fx_node.reduction_dim = reduction_dim.pop()
+    ), f"Expected exactly one reduction dimension for {op_name}, got {reduction_dim}"
+    fx_node.reduction_dim = reduction_dim.pop()
 
-    parse_ctx.add_mapping(op.result, mma_op.fx_node)
+
+def _handle_mma_like_op(op: MmaOp | ScaledMmaOp, parse_ctx: _OpParseContext) -> None:
+    """Handle wave.mma and wave.scaled_mma operations."""
+    is_scaled = isinstance(op, ScaledMmaOp)
+    lhs_node = parse_ctx.resolve_operand(op.lhs)
+    rhs_node = parse_ctx.resolve_operand(op.rhs)
+    acc_node = parse_ctx.resolve_operand(op.accumulator)
+
+    converted_attrs = _convert_supported_attrs(
+        op, ignore_attrs={AttrNames.INDEX.mlir_name}, parse_ctx=parse_ctx
+    )
+    if AttrNames.INDEX.mlir_name in op.attributes:
+        converted_attrs[AttrNames.INDEX.mlir_name] = convert_mma_index_to_sympy(
+            op.attributes[AttrNames.INDEX.mlir_name],
+            derived_dims=parse_ctx.derived_dims,
+            has_scale_operands=is_scaled,
+        )
+    mma_type = converted_attrs.pop(AttrNames.KIND.mlir_name, None)
+    # Pop vector_shapes before _apply_mlir_attrs_to_fx_node (which
+    # expects single-entry lists). MMA carries per-operand + result entries.
+    vector_shape_entries = converted_attrs.pop(AttrNames.VECTOR_SHAPES.mlir_name, None)
+
+    if is_scaled:
+        lhs_scale_node = parse_ctx.resolve_operand(op.lhs_scale)
+        rhs_scale_node = parse_ctx.resolve_operand(op.rhs_scale)
+        fx_op = ScaledMMA.create(
+            parse_ctx.graph,
+            lhs=lhs_node,
+            lhs_scale=lhs_scale_node,
+            rhs=rhs_node,
+            rhs_scale=rhs_scale_node,
+            acc=acc_node,
+            mma_type=mma_type,
+            type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+        )
+        operand_pairs = [
+            ("lhs", lhs_node),
+            ("lhs_scale", lhs_scale_node),
+            ("rhs", rhs_node),
+            ("rhs_scale", rhs_scale_node),
+            ("acc", acc_node),
+        ]
+    else:
+        fx_op = MMA.create(
+            parse_ctx.graph,
+            lhs=lhs_node,
+            rhs=rhs_node,
+            acc=acc_node,
+            mma_type=mma_type,
+            type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+        )
+        operand_pairs = [
+            ("lhs", lhs_node),
+            ("rhs", rhs_node),
+            ("acc", acc_node),
+        ]
+
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+
+    op_name = "ScaledMMA" if is_scaled else "MMA"
+    expected_vs_count = len(operand_pairs) + 1
+    if vector_shape_entries is not None:
+        assert len(vector_shape_entries) == expected_vs_count, (
+            f"{op_name} vector_shape must have {expected_vs_count} entries, "
+            f"got {len(vector_shape_entries)}"
+        )
+        for (name, node), vs in zip(operand_pairs, vector_shape_entries):
+            _check_operand_vector_shapes(op_name, name, node, vs)
+        result_vs = vector_shape_entries[-1]
+        if result_vs is not None:
+            fx_op.fx_node.vector_shapes = result_vs
+
+    _set_reduction_dim(fx_op.fx_node, lhs_node, rhs_node, acc_node, op_name)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
 
 
 def _handle_reduction_op(
@@ -937,10 +1023,12 @@ def _handle_reduction_op(
         # input and result (the verifier guarantees fully-specified types
         # when axis is absent).
         input_shape = set(
-            index_symbol(symbol_attr_to_name(s)) for s in op.inputs[0].type.shape
+            _resolve_dim(symbol_attr_to_name(s), parse_ctx)
+            for s in op.inputs[0].type.shape
         )
         result_shape = set(
-            index_symbol(symbol_attr_to_name(s)) for s in op.result.type.shape
+            _resolve_dim(symbol_attr_to_name(s), parse_ctx)
+            for s in op.result.type.shape
         )
         reduced_dims = input_shape - result_shape
         assert (
@@ -948,7 +1036,9 @@ def _handle_reduction_op(
         ), f"Expected exactly one reduced dimension, got {reduced_dims}"
         dim = reduced_dims.pop()
 
-    converted_attrs = _convert_supported_attrs(op, ignore_attrs={"scope", "axis"})
+    converted_attrs = _convert_supported_attrs(
+        op, ignore_attrs={"scope", "axis"}, parse_ctx=parse_ctx
+    )
 
     # The MLIR op always has a variadic input list, but pre-expansion
     # the FX graph uses a single node. Unwrap to match.
@@ -978,7 +1068,7 @@ def _handle_binary_op(
     """
     lhs_node = parse_ctx.resolve_operand(op.lhs)
     rhs_node = parse_ctx.resolve_operand(op.rhs)
-    converted_attrs = _convert_supported_attrs(op)
+    converted_attrs = _convert_supported_attrs(op, parse_ctx=parse_ctx)
 
     fx_op = fx_cls.create(
         parse_ctx.graph,
@@ -998,7 +1088,7 @@ def _handle_select_op(
     cond_node = parse_ctx.resolve_operand(op.condition)
     lhs_node = parse_ctx.resolve_operand(op.lhs)
     rhs_node = parse_ctx.resolve_operand(op.rhs)
-    converted_attrs = _convert_supported_attrs(op)
+    converted_attrs = _convert_supported_attrs(op, parse_ctx=parse_ctx)
 
     fx_op = Select.create(
         parse_ctx.graph,
@@ -1018,7 +1108,7 @@ def _handle_unary_op(
 ) -> None:
     """Handle unary arithmetic operations (wave.exp2, wave.reciprocal)."""
     arg_node = parse_ctx.resolve_operand(op.argument)
-    converted_attrs = _convert_supported_attrs(op)
+    converted_attrs = _convert_supported_attrs(op, parse_ctx=parse_ctx)
 
     fx_op = fx_cls.create(
         parse_ctx.graph,
@@ -1036,9 +1126,28 @@ def _handle_cast_op(
     """Handle wave.cast operation."""
     arg_node = parse_ctx.resolve_operand(op.value_to_cast)
     target_dtype = mlir_element_type_to_dtype(op.result.type.element_type)
-    converted_attrs = _convert_supported_attrs(op)
+    converted_attrs = _convert_supported_attrs(op, parse_ctx=parse_ctx)
 
     fx_op = Cast.create(
+        parse_ctx.graph,
+        arg=arg_node,
+        dtype=target_dtype,
+        type=_convert_wave_tensor_type(op.result.type, parse_ctx),
+    )
+    _apply_mlir_attrs_to_fx_node(fx_op.fx_node, converted_attrs)
+    parse_ctx.add_mapping(op.result, fx_op.fx_node)
+
+
+def _handle_bitcast_op(
+    op: BitcastOp,
+    parse_ctx: _OpParseContext,
+) -> None:
+    """Handle wave.bitcast operation."""
+    arg_node = parse_ctx.resolve_operand(op.value_to_cast)
+    target_dtype = mlir_element_type_to_dtype(op.result.type.element_type)
+    converted_attrs = _convert_supported_attrs(op, parse_ctx=parse_ctx)
+
+    fx_op = Bitcast.create(
         parse_ctx.graph,
         arg=arg_node,
         dtype=target_dtype,
@@ -1056,9 +1165,9 @@ def _handle_permute_op(
     value_node = parse_ctx.resolve_operand(op.value)
     result_type = op.result.type
     target_shape = tuple(
-        index_symbol(symbol_attr_to_name(attr)) for attr in result_type.shape
+        _resolve_dim(symbol_attr_to_name(attr), parse_ctx) for attr in result_type.shape
     )
-    converted_attrs = _convert_supported_attrs(op)
+    converted_attrs = _convert_supported_attrs(op, parse_ctx=parse_ctx)
 
     fx_op = Permute.create(
         parse_ctx.graph,
@@ -1089,7 +1198,7 @@ def _handle_shuffle_op(
     mode_attr = WaveShuffleModeAttr(op.mode)
     mode = _WAVE_SHUFFLE_MODE_TO_FX[mode_attr.value]
     converted_attrs = _convert_supported_attrs(
-        op, ignore_attrs={"offset", "width", "mode"}
+        op, ignore_attrs={"offset", "width", "mode"}, parse_ctx=parse_ctx
     )
 
     fx_op = Shuffle.create(
@@ -1120,6 +1229,7 @@ def _handle_self_index_op(
             AttrNames.DIM.mlir_name,
             AttrNames.ELEMENTS_PER_THREAD.mlir_name,
         },
+        parse_ctx=parse_ctx,
     )
 
     fx_op = SelfIndex.create(
@@ -1228,6 +1338,7 @@ def _handle_apply_expr_op(
             AttrNames.EXPR.mlir_name,
             AttrNames.COMBINATOR.mlir_name,
         },
+        parse_ctx=parse_ctx,
     )
 
     fx_op = ApplyExpr.create(
@@ -1253,6 +1364,7 @@ def _handle_extract_op(
     converted_attrs = _convert_supported_attrs(
         op,
         ignore_attrs={AttrNames.POSITION.mlir_name},
+        parse_ctx=parse_ctx,
     )
 
     fx_op = Extract.create(
@@ -1287,6 +1399,7 @@ def _handle_reshape_op(
             AttrNames.LOGICAL_SLICE.mlir_name,
             AttrNames.NUM_SLICES.mlir_name,
         },
+        parse_ctx=parse_ctx,
     )
 
     fx_op = Reshape.create(
@@ -1314,6 +1427,7 @@ def _handle_extract_slice_op(op: ExtractSliceOp, parse_ctx: _OpParseContext) -> 
             AttrNames.SIZE.mlir_name,
             AttrNames.STRIDE.mlir_name,
         },
+        parse_ctx=parse_ctx,
     )
 
     slice_op = ExtractSlice.create(
@@ -1480,6 +1594,7 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
             default_mma_type=parse_ctx.default_mma_type,
             value_map=local_map,
             unspecified_addr_counter=parse_ctx.unspecified_addr_counter,
+            derived_dims=parse_ctx.derived_dims,
         ),
     )
 
@@ -1502,8 +1617,9 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     # Infer index for the iterate node
     iter_index = None
     if AttrNames.INDEX.mlir_name in op.attributes:
-        iter_index = convert_index_mapping_array_to_sympy(
-            op, op.attributes[AttrNames.INDEX.mlir_name]
+        index_array = op.attributes[AttrNames.INDEX.mlir_name]
+        iter_index = convert_index_mapping_dict_to_sympy(
+            index_array[0], parse_ctx.derived_dims
         )
     else:
         # Try to infer from output values
@@ -1520,7 +1636,12 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     result_types = [
         _convert_wave_tensor_type(result.type, parse_ctx) for result in results
     ]
-    if len(result_types) == 1:
+    # The source trace stores a single type on the Iterate node when all
+    # results share the same type (the common case). Per-result types are
+    # tracked independently on each GetResult node. Collapse here to match.
+    if len(result_types) == 1 or (
+        result_types and all(t == result_types[0] for t in result_types)
+    ):
         iterate_op.fx_node.type = result_types[0]
     else:
         iterate_op.fx_node.type = result_types
@@ -1532,6 +1653,7 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
             "iterator",
             "operandSegmentSizes",
         },
+        parse_ctx=parse_ctx,
     )
 
     # Pop vector_shapes before the generic apply (which expects single-entry
@@ -1582,8 +1704,8 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_read_op(op, parse_ctx)
             case WriteOp():
                 _handle_write_op(op, parse_ctx)
-            case MmaOp():
-                _handle_mma_op(op, parse_ctx)
+            case MmaOp() | ScaledMmaOp():
+                _handle_mma_like_op(op, parse_ctx)
             case SumOp():
                 _handle_reduction_op(op, Sum, parse_ctx)
             case MaxElementOp():
@@ -1606,6 +1728,8 @@ def _convert_ops(ops: Sequence[ir.Operation], parse_ctx: _OpParseContext) -> Non
                 _handle_unary_op(op, Exp2, parse_ctx)
             case ReciprocalOp():
                 _handle_unary_op(op, Reciprocal, parse_ctx)
+            case BitcastOp():
+                _handle_bitcast_op(op, parse_ctx)
             case CastOp():
                 _handle_cast_op(op, parse_ctx)
             case PermuteOp():
@@ -1681,12 +1805,36 @@ def convert_mlir_to_trace(
         if func_op is None:
             raise ValueError("No func.func found in module")
 
-        # Convert hyperparameters into options.
+        # Convert hyperparameters into subs.
+        # Hyperparameters are either plain integers (e.g. K = 256) or
+        # derived expressions stored as WaveExprListAttr (e.g. K32 =
+        # ceiling(K/32)). Derived expressions reference base symbols, so
+        # we collect all base integers first, then evaluate derived ones
+        # in a second pass.
         options = WaveCompileOptions()
-        if (hyper := func_op.attributes.get("wave.hyperparameters")) is not None:
-            subs: dict = {}
-            for sym_attr, value_attr in hyper.mapping:
-                subs[index_symbol(sym_attr.name)] = value_attr.value
+        derived_dims: dict[str, IndexExpr] = {}
+        if (hyper_params := func_op.attributes.get("wave.hyperparameters")) is not None:
+            subs: dict[IndexSymbol, int] = {}
+            deferred: dict[str, tuple[IndexSymbol, IndexExpr]] = {}
+            for param in hyper_params.mapping:
+                sym = index_symbol(param.name)
+                if isinstance(param.attr, WaveExprListAttr):
+                    exprs = expr_list_attr_to_exprs(param.attr)
+                    assert len(exprs) == 1, (
+                        f"Expected single expression for derived dim {sym}, "
+                        f"got {len(exprs)}"
+                    )
+                    deferred[param.name] = (sym, exprs[0])
+                else:
+                    subs[sym] = param.attr.value
+            for name, (sym, expr) in deferred.items():
+                derived_dims[name] = expr
+                evaluated = expr.subs(subs)
+                assert evaluated.is_number, (
+                    f"Derived dim {name} = {expr} did not resolve to a "
+                    f"number (got {evaluated}); base hyperparameters may be missing"
+                )
+                subs[sym] = int(evaluated)
             options.subs = subs
         constraints = _convert_constraints(func_op)
 
@@ -1702,6 +1850,7 @@ def convert_mlir_to_trace(
             graph=root_graph,
             region_graph=region_graph,
             default_mma_type=default_mma_type,
+            derived_dims=derived_dims,
         )
 
         # Create placeholders for function arguments

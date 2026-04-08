@@ -31,6 +31,8 @@ from ...lang.wave_types import Memory, Register
 from ..constraints import HardwareConstraint, TilingConstraint, WaveConstraint
 from ...ops.wave_ops import (
     MMA,
+    MMABase,
+    ScaledMMA,
     Allocate,
     Broadcast,
     Conditional,
@@ -484,6 +486,46 @@ def _check_index_equivalent(
     raise ValueError(f"Unsupported index types: {type(lhs)} vs {type(rhs)}")
 
 
+def _check_mma_indices_equivalent(
+    lhs_custom: MMABase,
+    rhs_custom: MMABase,
+    subs: Optional[dict[IndexSymbol, int]],
+) -> Result:
+    """Compare MMA/ScaledMMA indices per-operand rather than on the combined dict.
+
+    The combined index dict carries Piecewise expressions whose conditions use
+    MMA_LHS, MMA_ACC, MMA_LHS_SCALE, MMA_RHS_SCALE, MMA_SCALE_FP4, etc.
+    Each per-operand property (lhs_index, rhs_index, ...) substitutes these
+    with concrete 0/1 values, resolving the Piecewise. Comparing per-operand
+    avoids mismatches from Piecewise branches that are dead for a given dtype
+    configuration and therefore lost during MLIR serialization.
+    """
+    # Result index == acc index (asserted in convert_mma_index_to_sympy),
+    # so comparing acc suffices.
+    operand_names = ["lhs", "rhs", "acc"]
+    if isinstance(lhs_custom, ScaledMMA):
+        operand_names = ["lhs", "lhs_scale", "rhs", "rhs_scale", "acc"]
+
+    for name in operand_names:
+        lhs_op_index = getattr(lhs_custom, f"{name}_index", None)
+        rhs_op_index = getattr(rhs_custom, f"{name}_index", None)
+        if lhs_op_index is None:
+            continue
+        if rhs_op_index is None:
+            return Failure(
+                f"{type(lhs_custom).__name__}.{name}_index: present in reference but absent in actual"
+            )
+        if not (
+            check_result := _check_index_mapping_equivalent(
+                lhs_op_index, rhs_op_index, subs
+            )
+        ):
+            return Failure(
+                f"{type(lhs_custom).__name__}.{name}_index: {check_result.error}"
+            )
+    return Success()
+
+
 def _check_nodes_equivalent(
     lhs_custom: CustomOp,
     rhs_custom: CustomOp,
@@ -598,7 +640,17 @@ def _check_nodes_equivalent(
                 return Failure(
                     f"index lost on {type(lhs_custom).__name__}: present in reference but absent in actual",
                 )
-            if not (
+            # MMA/ScaledMMA: compare per-operand indices rather than the
+            # combined dict, which carries Piecewise branches that may be
+            # dead for a given dtype and lost during MLIR serialization.
+            if isinstance(lhs_custom, MMABase):
+                if not (
+                    check_result := _check_mma_indices_equivalent(
+                        lhs_custom, rhs_custom, subs
+                    )
+                ):
+                    return check_result
+            elif not (
                 check_result := _check_index_equivalent(lhs_index, rhs_index, subs)
             ):
                 return check_result

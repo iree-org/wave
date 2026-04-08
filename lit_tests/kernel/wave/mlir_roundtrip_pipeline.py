@@ -28,6 +28,7 @@ from wave_lang.kernel.wave.constraints import (
     HardwareConstraint,
     MMAType,
     TilingConstraint,
+    WaveConstraint,
 )
 from wave_lang.kernel.wave.mlir_converter.diagnostics import error_diagnostics
 from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
@@ -48,6 +49,7 @@ from wave_lang.kernel.wave.utils.graph_utils import (
     assert_constraints_equivalent,
     compare_hardware_constraints_for_mlir_roundtrip,
     compare_tiling_constraints_for_mlir_roundtrip,
+    compare_wave_constraints_for_mlir_roundtrip,
 )
 
 
@@ -83,7 +85,9 @@ def _try_roundtrip(
             custom_comparators={
                 HardwareConstraint: compare_hardware_constraints_for_mlir_roundtrip,
                 TilingConstraint: compare_tiling_constraints_for_mlir_roundtrip,
+                WaveConstraint: compare_wave_constraints_for_mlir_roundtrip,
             },
+            subs=options.subs,
         )
 
         return Success()
@@ -255,41 +259,11 @@ def mxfp4_gemm_progressive_roundtrip():
     options.linearize_reads = False
 
     # Passes whose MLIR roundtrip is known to fail for this kernel.
-    # Passes 1-11: emitter lacks ScaledMmaOp in the Water MLIR dialect.
-    # Passes 12-44: BLOCK_M/2 from wave_shape=(2,2) produces an invalid
-    #   fraction in the sympy-to-affine index converter.
-    # Pass 38: run_manual_schedule crashes (partition_by_dim expects expanded K).
-    # Passes 45-49: type metadata corruption after simplify_indices
-    #   (issubclass() arg 1 must be a class).
+    # - run_manual_schedule: crashes (partition_by_dim expects expanded K).
+    # - gather_to_shared and later: GatherToLDS nodes have type=None,
+    #   causing issubclass() failures in the water_emitter.
     expected_failures = frozenset(
         {
-            "debug_log_hoist",
-            "initialize_iter_args",
-            "create_induction_vars",
-            "initialize_reductions",
-            "finalize_indices",
-            "substitute_vector_shapes",
-            "add_get_results",
-            "infer_types",
-            "construct_index_mapping",
-            "debug_log_write_replace",
-            "promote_placeholders",
-            "set_node_indices",
-            "reorder_workgroups",
-            "expand_graph",
-            "set_post_expansion_indices",
-            "remove_chained_getresult",
-            "decompose_vmma_ops",
-            "decompose_dot_mma",
-            "hoist_loop_invariant_ops",
-            "tensor_load_to_shared",
-            "multicast",
-            "fuse_tensor_loads",
-            "in_thread_transpose",
-            "global_to_shared_gathers",
-            "minimize_global_loads",
-            "preshuffle_scale_to_shared",
-            "specialize_kernel",
             "gather_to_shared",
             "gather_to_shared_swizzling",
             "mark_hardware_transpose_candidates",
