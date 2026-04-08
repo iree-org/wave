@@ -36,15 +36,17 @@ def remap_iter_args(
 def update_index_for_unroll(index: dict, induction_var, unroll_offset: int) -> dict:
     """
     Update an index dict by substituting the induction variable with
-    induction_var + unroll_offset.
+    induction_var + unroll_offset in both keys and values.
 
     This is used to update indexing for unrolled iterations.
     """
     if index is None:
         return None
+    subs = {induction_var: induction_var + unroll_offset}
     updated_index = {}
     for key, dim in index.items():
-        updated_index[key] = dim.subs({induction_var: induction_var + unroll_offset})
+        new_key = key.subs(subs) if hasattr(key, "subs") else key
+        updated_index[new_key] = dim.subs(subs)
     return updated_index
 
 
@@ -147,7 +149,7 @@ def unroll(
             # update nodes using the induction_var for indexing
             unroll_offset = unroll_idx + 1
 
-            # Handle GatherToLDS which has separate src_index/dst_index
+            # Handle GatherToLDS which has separate src_index/dst_index/src_bounds
             # Use update_arg to properly update both the dataclass field AND the fx.Node args
             if isinstance(copy, GatherToLDS):
                 if copy.src_index:
@@ -160,11 +162,21 @@ def unroll(
                         copy.dst_index, induction_var, unroll_offset
                     )
                     copy.update_arg("dst_index", updated_dst)
+                if copy.src_bounds:
+                    updated_bounds = update_index_for_unroll(
+                        copy.src_bounds, induction_var, unroll_offset
+                    )
+                    copy.update_arg("src_bounds", updated_bounds)
 
             # Standard index update for other operations
             if copy.index:
                 copy.index = update_index_for_unroll(
                     copy.index, induction_var, unroll_offset
+                )
+            if hasattr(copy, "bounds") and copy.bounds:
+                copy.update_arg(
+                    "bounds",
+                    update_index_for_unroll(copy.bounds, induction_var, unroll_offset),
                 )
             value_use_map[original.fx_node] = copy.fx_node
 
