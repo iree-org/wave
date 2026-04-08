@@ -477,6 +477,21 @@ LivenessInfo computeLiveness(ProgramOp program) {
     }
   }
 
+  // Pass 2c: Extend V_PERMLANE16_SWAP_B32 source live ranges.
+  // The hardware clobbers BOTH dst and src registers. If the allocator
+  // assigns them the same physical register, the original value is lost.
+  // Extend the src's live range to match the dst's end point so the
+  // allocator cannot reuse src's register for dst.
+  program.walk([&](V_PERMLANE16_SWAP_B32 swapOp) {
+    Value src = swapOp.getSrc();
+    Value dst = swapOp.getDst();
+    auto srcIt = info.ranges.find(src);
+    auto dstIt = info.ranges.find(dst);
+    if (srcIt != info.ranges.end() && dstIt != info.ranges.end()) {
+      srcIt->second.end = std::max(srcIt->second.end, dstIt->second.end);
+    }
+  });
+
   // Note: Pass 3 (CFG-based backward dataflow liveness extension) has been
   // removed. It was needed for the old label-based control flow path where
   // loop back-edges were represented as explicit branch instructions. With

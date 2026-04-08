@@ -1306,23 +1306,18 @@ LogicalResult handlePermlane16Swap(Operation *op, TranslationContext &ctx) {
     srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
   }
 
+  // Pass the original source directly to the swap. The hardware clobbers
+  // BOTH dst and src, but the emitter handles this by routing through
+  // scratch when the allocator assigns conflicting registers.
   auto dstType = ctx.createVRegType();
-  auto origType = ctx.createVRegType();
-  auto swapResult =
-      V_PERMLANE16_SWAP_B32::create(builder, loc, dstType, origType, srcVal);
-  Value swapped = swapResult->getResult(0);
-  Value original = swapResult->getResult(1);
+  Value swapped = V_PERMLANE16_SWAP_B32::create(builder, loc, dstType, srcVal);
 
   // The MLIR result is !llvm.struct<(i32, i32)>.
   // Element [0] = swapped value (from partner lane).
-  // Element [1] = original value (preserved by the 2-result op).
+  // Element [1] = original value (srcVal — the emitter preserves it).
   ctx.getMapper().mapValue(swapOp.getRes(), swapped);
   ctx.getMapper().setExtraMapping(swapOp.getRes(), 0, swapped);
-  ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, original);
-
-  // Remap the source SSA value to the preserved original so subsequent
-  // uses (e.g., arith.select) read the original, not the clobbered register.
-  ctx.getMapper().mapValue(swapOp.getSrc(), original);
+  ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, srcVal);
 
   return success();
 }
