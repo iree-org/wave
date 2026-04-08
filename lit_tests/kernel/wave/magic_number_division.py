@@ -115,14 +115,11 @@ def test_magic_number_div():
     # CHECK-DAG:     arith.constant 4294967295 : i64
     # CHECK-DAG:     %[[C32:.*]] = arith.constant 32 : i64
     #
-    # Magic precomputation (divui) followed by multiply-high (shrui):
+    # Magic precomputation: one divui per unique dynamic divisor.
     # CHECK:         arith.divui {{.*}} : i64
-    # CHECK:         arith.shrui {{.*}}, %[[C32]] : i64
+    # CHECK:         arith.divui {{.*}} : i64
     #
-    # Consume remaining precomputations from other address calculations.
-    # CHECK:         arith.divui
-    # CHECK:         arith.divui
-    # CHECK:         arith.divui
+    # Multiply-high (shrui >> 32) reusing precomputed magic numbers.
     # CHECK:         arith.shrui {{.*}}, %[[C32]] : i64
     #
     # Amortised: mulhi reusing a previously computed magic number
@@ -130,5 +127,6 @@ def test_magic_number_div():
     # CHECK-NOT:     arith.divui
     # CHECK-NOT:     arith.divsi
     # CHECK:         arith.shrui {{.*}}, %[[C32]] : i64
+    # CHECK-NOT:     arith.divui
     # CHECK-NOT:     arith.divsi
     # CHECK:         return
