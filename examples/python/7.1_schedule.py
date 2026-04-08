@@ -534,15 +534,19 @@ def test_benchmark_coalesce_epilogue(
 
 def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     is_debug=False,
-    shape=(1024, 1024, 8192),
-    block=(128, 256, 256),
+    shape=(1024, 3072, 8192),
+    block=(256, 192, 256),
     eliminate_epilogue=False,
 ):
-    """Preshuffle-B MXFP4 GEMM with dynamic M, N, K."""
+    """Preshuffle-B MXFP4 GEMM with dynamic M, N, K (WaveASM backend).
+
+    Same config as test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm but using
+    the C++ WaveASM backend instead of LLVM.
+    """
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
-        shape, block, wave_shape=(1, 4), reorder_workgroups=False
+        shape, block, wave_shape=(2, 2), reorder_workgroups=True,
+        output_dtype=tkl.bf16,
     )
-    # Make M, N, K dynamic so the compiler does not specialize on problem size.
     dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
     for sym in dynamic_symbols:
         del options.subs[sym]
@@ -552,7 +556,8 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     options.use_wave_asm_backend = True
     options.wave_runtime = True
     options.eliminate_epilogue = eliminate_epilogue
-    options.dump_intermediates = "build/intermediates/"
+    options.coalesce_epilogue_stores = False
+    options.dump_intermediates = "build/intermediates/asm_256x192x256/"
     schedule = get_mxfp4_asymmetric_schedule(
         eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
     )
@@ -560,7 +565,7 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
-    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True, output_dtype=torch.bfloat16)
     print(
         "MXFP GEMM preshuffle-B 4-wave dynamic M, N, K (WaveASM backend) test passed!"
     )
