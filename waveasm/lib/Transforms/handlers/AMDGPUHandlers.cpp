@@ -15,6 +15,7 @@
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -1286,6 +1287,62 @@ LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx) {
   auto result = V_READFIRSTLANE_B32::create(builder, loc, sregType, *src);
   ctx.getMapper().mapValue(op->getResult(0), result);
 
+  return success();
+}
+
+LogicalResult handlePermlane16Swap(Operation *op, TranslationContext &ctx) {
+  auto swapOp = cast<ROCDL::Permlane16SwapOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto src = ctx.getMapper().getMapped(swapOp.getSrc());
+  if (!src) {
+    return op->emitError("permlane16_swap source not mapped");
+  }
+
+  Value srcVal = *src;
+  if (isAGPRType(srcVal.getType())) {
+    auto vregTmp = ctx.createVRegType();
+    srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
+  }
+
+  auto dstType = ctx.createVRegType();
+  auto origType = ctx.createVRegType();
+  auto swapResult =
+      V_PERMLANE16_SWAP_B32::create(builder, loc, dstType, origType, srcVal);
+  Value swapped = swapResult->getResult(0);
+  Value original = swapResult->getResult(1);
+
+  // The MLIR result is !llvm.struct<(i32, i32)>.
+  // Element [0] = swapped value (from partner lane).
+  // Element [1] = original value (preserved by the 2-result op).
+  ctx.getMapper().mapValue(swapOp.getRes(), swapped);
+  ctx.getMapper().setExtraMapping(swapOp.getRes(), 0, swapped);
+  ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, original);
+
+  // Remap the source SSA value to the preserved original so subsequent
+  // uses (e.g., arith.select) read the original, not the clobbered register.
+  ctx.getMapper().mapValue(swapOp.getSrc(), original);
+
+  return success();
+}
+
+LogicalResult handleLLVMExtractValue(Operation *op, TranslationContext &ctx) {
+  auto extractOp = cast<LLVM::ExtractValueOp>(op);
+
+  auto position = extractOp.getPosition();
+  if (position.size() != 1) {
+    return op->emitError("only single-level extractvalue supported");
+  }
+  int64_t idx = position[0];
+
+  Value container = extractOp.getContainer();
+  auto elem = ctx.getMapper().getExtraMapping(container, idx);
+  if (!elem) {
+    return op->emitError("extractvalue element ") << idx << " not mapped";
+  }
+
+  ctx.getMapper().mapValue(extractOp.getResult(), *elem);
   return success();
 }
 

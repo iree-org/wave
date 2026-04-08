@@ -114,6 +114,32 @@ LogicalResult handleVectorShapeCast(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx) {
+  auto fromOp = cast<vector::FromElementsOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  SmallVector<Value> mappedElems;
+  for (Value elem : fromOp.getElements()) {
+    auto mapped = ctx.getMapper().getMapped(elem);
+    if (!mapped) {
+      return op->emitError("from_elements operand not mapped");
+    }
+    mappedElems.push_back(*mapped);
+  }
+
+  int64_t numElems = mappedElems.size();
+  if (numElems == 1) {
+    ctx.getMapper().mapValue(fromOp.getResult(), mappedElems[0]);
+  } else {
+    int64_t alignment = (numElems >= 4) ? 4 : (numElems >= 2) ? 2 : 1;
+    auto packedType = ctx.createVRegType(numElems, alignment);
+    auto packed = PackOp::create(builder, loc, packedType, mappedElems);
+    ctx.getMapper().mapValue(fromOp.getResult(), packed);
+  }
+  return success();
+}
+
 LogicalResult handleVectorBitCast(Operation *op, TranslationContext &ctx) {
   auto castOp = cast<vector::BitCastOp>(op);
 

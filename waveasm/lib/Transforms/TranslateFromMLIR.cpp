@@ -1636,12 +1636,21 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
 
     // BF16 store conversion: the arith.truncf handler defers vector f32->bf16
     // conversion, so data registers may still contain f32 values.
+    // Skip conversion if data is already packed bf16 (e.g. from permlane
+    // coalescing path where the data went through explicit conversion and
+    // packing — the register count matches numElems/2, not numElems).
     if (elementType.isBF16() && data.has_value()) {
       int64_t numElems = vectorType.getNumElements();
-      auto [converted, newNumBytes] =
-          convertF32ToBF16ForStore(*data, numElems, ctx, builder, loc);
-      data = converted;
-      numBytes = newNumBytes;
+      int64_t dataRegs = getRegSize(data->getType());
+      bool alreadyPacked = (dataRegs <= numElems / 2);
+      if (!alreadyPacked) {
+        auto [converted, newNumBytes] =
+            convertF32ToBF16ForStore(*data, numElems, ctx, builder, loc);
+        data = converted;
+        numBytes = newNumBytes;
+      } else {
+        numBytes = numElems * 2;
+      }
     }
 
     // Split large stores into multiple buffer_store_dwordx4 (16 bytes each)
@@ -1868,6 +1877,9 @@ LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx);
 LogicalResult handleROCDLSBarrier(Operation *op, TranslationContext &ctx);
 LogicalResult handleROCDLSetPrio(Operation *op, TranslationContext &ctx);
 LogicalResult handleSWaitcnt(Operation *op, TranslationContext &ctx);
+LogicalResult handlePermlane16Swap(Operation *op, TranslationContext &ctx);
+LogicalResult handleLLVMExtractValue(Operation *op, TranslationContext &ctx);
+LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx);
 
 //===----------------------------------------------------------------------===//
 // OpHandlerRegistry Implementation
@@ -2010,6 +2022,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(vector::InsertOp, handleVectorInsert);
   REGISTER_HANDLER(vector::ShapeCastOp, handleVectorShapeCast);
   REGISTER_HANDLER(vector::BitCastOp, handleVectorBitCast);
+  REGISTER_HANDLER(vector::FromElementsOp, handleVectorFromElements);
   REGISTER_HANDLER(vector::TransferReadOp, handleVectorTransferRead);
   REGISTER_HANDLER(vector::TransferWriteOp, handleVectorTransferWrite);
   REGISTER_HANDLER(vector::FMAOp, handleVectorFma);
@@ -2031,6 +2044,10 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(ROCDL::SBarrierOp, handleROCDLSBarrier);
   REGISTER_HANDLER(ROCDL::SetPrioOp, handleROCDLSetPrio);
   REGISTER_HANDLER(ROCDL::SWaitcntOp, handleSWaitcnt);
+  REGISTER_HANDLER(ROCDL::Permlane16SwapOp, handlePermlane16Swap);
+
+  // LLVM dialect
+  REGISTER_HANDLER(LLVM::ExtractValueOp, handleLLVMExtractValue);
 
   // IREE/Stream dialect (unregistered operations)
   registerHandler(mlir::OperationName("stream.binding.subspan", ctx),

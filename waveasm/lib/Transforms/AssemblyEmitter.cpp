@@ -971,6 +971,29 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return formatter.format("v_cvt_pk_bf16_f32", operands);
           })
 
+      // V_PERMLANE16_SWAP_B32: swap lanes 16 apart.
+      // 2-result op: result[0]=swapped dst, result[1]=preserved original.
+      // The hardware clobbers BOTH dst and src. When original==src (same
+      // physical register), route through scratch to preserve the original.
+      .Case<V_PERMLANE16_SWAP_B32>(
+          [&](V_PERMLANE16_SWAP_B32 swapOp) -> std::optional<std::string> {
+            std::string dst = resolveValue(swapOp.getDst());
+            std::string original = resolveValue(swapOp.getOriginal());
+            std::string src = resolveValue(swapOp.getSrc());
+            std::string lines;
+            if (original == src) {
+              std::string scratch = formatVGPRRange(kScratchVGPR, 1);
+              peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+              invalidateScratchCache();
+              lines += "  v_mov_b32 " + scratch + ", " + src + "\n";
+              lines += "  v_permlane16_swap_b32 " + dst + ", " + scratch;
+            } else {
+              lines += "  v_mov_b32 " + original + ", " + src + "\n";
+              lines += "  v_permlane16_swap_b32 " + dst + ", " + src;
+            }
+            return lines;
+          })
+
       // V_ACCVGPR_READ_B32: unroll multi-register reads into scalar ops
       .Case<V_ACCVGPR_READ_B32>(
           [&](V_ACCVGPR_READ_B32 readOp) -> std::optional<std::string> {
