@@ -61,7 +61,10 @@ def update_index(
     index: dict[IndexSymbol, IndexSequence | IndexExpr],
     subs: dict[IndexSymbol, IndexSymbol],
 ) -> dict[IndexSymbol, IndexSequence | IndexExpr]:
-    return {k: v.subs(subs) for k, v in index.items()}
+    return {
+        (k.subs(subs) if hasattr(k, "subs") else k): v.subs(subs)
+        for k, v in index.items()
+    }
 
 
 def update_loop_dependent_args_if_present(
