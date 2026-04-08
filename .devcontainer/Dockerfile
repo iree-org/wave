@@ -19,12 +19,20 @@ RUN apt-get update && apt-get install -y \
     sudo \
     vim \
     ccache \
-    gh \
     ninja-build \
     cmake \
     && apt-get install -y \
         python${PYTHON_VERSION}-dev \
         python${PYTHON_VERSION}-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -nv -o /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && mkdir -p -m 755 /etc/apt/sources.list.d \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
 RUN CODENAME=$([ "${UBUNTU_VERSION}" = "22.04" ] && echo "jammy" || echo "noble") && \
@@ -55,9 +63,4 @@ USER ubuntu
 WORKDIR /home/ubuntu
 
 RUN curl -fsSL https://claude.ai/install.sh | bash && \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended && \
-    echo '[ -f "$HOME/.config/claude-code/env.sh" ] && source "$HOME/.config/claude-code/env.sh"' >> ~/.zshrc && \
-    git clone --depth=1 https://github.com/gpakosz/.tmux.git ~/.oh-my-tmux && \
-    ln -sf ~/.oh-my-tmux/.tmux.conf ~/.tmux.conf && \
-    cp ~/.oh-my-tmux/.tmux.conf.local ~/.tmux.conf.local
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
