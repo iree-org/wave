@@ -90,14 +90,17 @@ def _run_mxfp_gemm_preshuffle(
 
     x, w_t_ps = x.cuda(), w_t_ps.cuda()
     x_scales_ps, w_scales_ps = x_scales_ps.cuda(), w_scales_ps.cuda()
-    if transpose_output:
-        out = torch.zeros(w_t_ps.shape[0], x.shape[0], dtype=output_dtype).cuda()
-    else:
-        out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=output_dtype).cuda()
+    
+    # breakpoint()
+    # if transpose_output:
+    #     out = torch.zeros(w_t_ps.shape[0], x.shape[0], dtype=output_dtype).cuda()
+    # else:
+    out = torch.zeros(x.shape[0], w_t_ps.shape[0], dtype=output_dtype).cuda()
 
     gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
 
-    result = out.T.contiguous().cpu() if transpose_output else out.cpu()
+    # result = out.T.contiguous().cpu() if transpose_output else out.cpu()
+    result = out.cpu()
     torch.testing.assert_close(
         torch_out, result, check_dtype=False, check_device=False
     )
@@ -412,12 +415,13 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm(
 ):
     """Preshuffle-B MXFP4 GEMM with dynamic M, N, K and coalesced epilogue stores.
 
-    Output is C^T [N, M] in bf16. The coalesce_epilogue_stores pass uses
-    v_permlane16_swap to emit buffer_store_dwordx4 (8 bf16 per store).
+    Computes C = B × A^T with swapped MFMA operands. Output is C [M, N] in bf16.
+    The coalesce_epilogue_stores pass uses v_permlane16_swap to emit
+    buffer_store_dwordx4 (8 bf16 per store).
     """
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
         shape, block, wave_shape=(2, 2), reorder_workgroups=True,
-        output_dtype=tkl.bf16, transpose_output=True,
+        output_dtype=tkl.bf16,
     )
     dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
     for sym in dynamic_symbols:
@@ -440,7 +444,7 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm(
         f.write(gemm.asm)
 
     _run_mxfp_gemm_preshuffle(
-        gemm, shape, all=True, output_dtype=torch.bfloat16, transpose_output=True,
+        gemm, shape, all=True, output_dtype=torch.bfloat16,
     )
     print("MXFP GEMM preshuffle-B 4-wave dynamic M, N, K (coalesced stores) test passed!")
 
@@ -456,12 +460,12 @@ def test_benchmark_coalesce_epilogue(
 
     M, N, K = shape
     flops_per_gemm = 2 * M * N * K
-    num_iters = 1000
+    num_iters = 100
 
-    def _compile_kernel(coalesce, transpose):
+    def _compile_kernel(coalesce):
         gemm_fn, opts = get_tagged_mxfp4_gemm_preshuffle_b(
             shape, block, wave_shape=(2, 2), reorder_workgroups=True,
-            output_dtype=tkl.bf16, transpose_output=transpose,
+            output_dtype=tkl.bf16,
         )
         dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in dynamic_symbols:
@@ -490,12 +494,9 @@ def test_benchmark_coalesce_epilogue(
             w_t_ps.cuda(), w_scales_ps.cuda(),
         )
 
-    def _time_kernel(gemm_fn, inputs, transpose):
+    def _time_kernel(gemm_fn, inputs):
         x, x_sc, w_t, w_sc = inputs
-        if transpose:
-            out = torch.zeros(w_t.shape[0], x.shape[0], dtype=torch.bfloat16).cuda()
-        else:
-            out = torch.zeros(x.shape[0], w_t.shape[0], dtype=torch.bfloat16).cuda()
+        out = torch.zeros(x.shape[0], w_t.shape[0], dtype=torch.bfloat16).cuda()
 
         for _ in range(5):
             gemm_fn(x, x_sc, w_t, w_sc, out)
@@ -511,16 +512,16 @@ def test_benchmark_coalesce_epilogue(
     inputs = _prepare_inputs()
 
     print(f"Shape: M={M}, N={N}, K={K}  Block: {block}")
-    print(f"Compiling baseline (buffer_store_short, C [M,N])...")
-    gemm_baseline = _compile_kernel(coalesce=False, transpose=False)
+    print(f"Compiling baseline (buffer_store_short)...")
+    gemm_baseline = _compile_kernel(coalesce=False)
 
-    print(f"Compiling coalesced (buffer_store_dwordx4, C^T [N,M])...")
-    gemm_coalesced = _compile_kernel(coalesce=True, transpose=True)
+    print(f"Compiling coalesced (buffer_store_dwordx4)...")
+    gemm_coalesced = _compile_kernel(coalesce=True)
 
     print(f"Warming up and timing {num_iters} iterations each...\n")
 
-    t_baseline = _time_kernel(gemm_baseline, inputs, transpose=False)
-    t_coalesced = _time_kernel(gemm_coalesced, inputs, transpose=True)
+    t_baseline = _time_kernel(gemm_baseline, inputs)
+    t_coalesced = _time_kernel(gemm_coalesced, inputs)
 
     tflops_baseline = (flops_per_gemm * num_iters) / t_baseline / 1e12
     tflops_coalesced = (flops_per_gemm * num_iters) / t_coalesced / 1e12
