@@ -111,16 +111,14 @@ def test_dynamic_preshuffle_b_mxfp4_eliminate_epilogue():
     # 5. Loop carries vector iter_args (epilogue folded in).
     # CHECK-SAME: vector<4xf32>
 
-    # 6. OOB guard: arith.select clamps the gather index to an
-    #    out-of-bounds sentinel so the hardware returns zeros on OOB loads.
+    # 6. OOB guard + gather: arith.select clamps the gather index to an
+    #    out-of-bounds sentinel, then gather_to_lds uses the clamped index.
     # CHECK: arith.select %{{.*}}, %{{.*}}, %c2147483647 : index
+    # CHECK: amdgpu.gather_to_lds
 
-    # 7. fat_raw_buffer_cast uses the dynamically selected validBytes.
-    # CHECK: amdgpu.fat_raw_buffer_cast %{{.*}} validBytes(%{{.*}})
-
-    # 8. scaled_mfma inside the pipelined loop.
+    # 7. scaled_mfma inside the pipelined loop.
     # CHECK: amdgpu.scaled_mfma
 
-    # 9. Loop body ends; no epilogue mfma between loop end and scf.yield.
+    # 8. Loop body ends; no epilogue mfma between loop end and scf.yield.
     # CHECK: scf.yield
     # CHECK-NEXT: }
