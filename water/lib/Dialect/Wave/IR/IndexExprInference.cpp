@@ -3857,8 +3857,8 @@ LogicalResult wave::setWaveIndexExprAnalysisResults(
           }
         }
 
-        SmallVector<wave::IndexExprsLatticeStorage> slots = llvm::map_to_vector(
-            valuesForIndexExpr, [&](Value v) { return getLatticeValue(v); });
+        SmallVector<wave::IndexExprsLatticeStorage> slots =
+            llvm::map_to_vector(valuesForIndexExpr, getLatticeValue);
         // Only set the index expressions if there were no failures.
         if (!hadFailures) {
           MLIRContext *ctx = iface->getContext();
