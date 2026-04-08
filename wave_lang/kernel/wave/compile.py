@@ -546,17 +546,8 @@ def build_graph_passes(
     graph_passes.append(
         partial(guard_g2s_with_bounds_check, trace, launchable.constraints)
     )
-    if options.optimization_level:
-        graph_passes.append(
-            partial(
-                minimize_shared_allocs,
-                trace,
-                options.minimize_shared_allocs,
-            ),
-        )
 
     graph_passes += [
-        partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
         partial(simplify_indices, trace, launchable.constraints),
         partial(
             partition_gather_like_ops, trace, launchable.constraints, options.target
@@ -635,7 +626,7 @@ def build_graph_passes(
         )
 
     if options.optimization_level:
-        graph_passes.append(
+        graph_passes += [
             partial(
                 schedule_reordering,
                 trace,
@@ -643,9 +634,15 @@ def build_graph_passes(
                 scheduling_type,
                 options.use_global_to_shared,
             ),
-        )
+            partial(
+                minimize_shared_allocs,
+                trace,
+                options.minimize_shared_allocs,
+            ),
+        ]
 
     graph_passes += [
+        partial(compute_shared_memory_usage, trace, options.kernel_launch_info),
         partial(
             add_shared_memory_barriers,
             trace,
