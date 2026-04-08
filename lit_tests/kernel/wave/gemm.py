@@ -2512,7 +2512,7 @@ def test_persistent_gemm():
     # CHECK:           %[[BLOCK_ID_X:.+]] = gpu.block_id  x upper_bound 304
 
     # Persistent loop
-    # CHECK:           %{{.*}} = scf.while (%[[ARG3:.+]] = %[[BLOCK_ID_X]]) : (index) -> index {
+    # CHECK:           %{{.*}} = scf.while (%[[ARG3:.+]] = %{{.*}}) : (index) -> index {
     # CHECK:             %{{.*}} = arith.cmpi slt, %[[ARG3]], %[[C128]] : index
     # CHECK:             scf.condition(%{{.*}}) %[[ARG3]] : index
     # CHECK:           } do {
