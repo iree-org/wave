@@ -368,6 +368,49 @@ wave::ExecutionEngine::lookup(wave::ExecutionEngine::ModuleHandle handle,
   return makeStringError("looked up function is null");
 }
 
+llvm::Expected<wave::ExecutionEngine::ModuleHandle>
+wave::ExecutionEngine::loadFromObjectFile(llvm::StringRef filename) {
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
+      llvm::MemoryBuffer::getFile(filename);
+  if (!fileOrErr)
+    return makeStringError("could not open object file '" + filename +
+                           "': " + fileOrErr.getError().message());
+
+  // Create a unique JITDylib for this object.
+  llvm::orc::JITDylib *dylib = nullptr;
+  while (true) {
+    std::string uniqueName =
+        (llvm::Twine("module") + llvm::Twine(uniqueNameCounter++)).str();
+    if (jit->getJITDylibByName(uniqueName))
+      continue;
+
+    llvm::Expected<llvm::orc::JITDylib &> res =
+        jit->createJITDylib(std::move(uniqueName));
+    if (!res)
+      return res.takeError();
+
+    dylib = &res.get();
+    break;
+  }
+  assert(dylib && "failed to create JITDylib");
+
+  const llvm::DataLayout &dataLayout = jit->getDataLayout();
+  dylib->addGenerator(
+      cantFail(llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+          dataLayout.getGlobalPrefix())));
+
+  if (symbolMap)
+    cantFail(
+        dylib->define(absoluteSymbols(symbolMap(llvm::orc::MangleAndInterner(
+            dylib->getExecutionSession(), dataLayout)))));
+
+  // Use cantFail here because recovering from a partially loaded dylib would
+  // leave the execution engine in an inconsistent state.
+  llvm::cantFail(jit->addObjectFile(*dylib, std::move(fileOrErr.get())));
+  llvm::cantFail(jit->initialize(*dylib));
+  return static_cast<ModuleHandle>(dylib);
+}
+
 llvm::Error wave::ExecutionEngine::dumpToObjectFile(llvm::StringRef filename) {
   if (cache == nullptr)
     return makeStringError("cannot dump ExecutionEngine object code to file: "

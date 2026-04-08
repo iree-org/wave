@@ -192,6 +192,24 @@ Returns:
 Raises:
     RuntimeError: If function lookup fails)")
       .def(
+          "load_from_object_file",
+          [](wave::ExecutionEngine &self, const std::string &filename) {
+            return reinterpret_cast<uintptr_t>(
+                unwrapExpected(self.loadFromObjectFile(filename),
+                               "Failed to load object file"));
+          },
+          nb::arg("filename"),
+          R"(Load a pre-compiled object file into the execution engine.
+
+Args:
+    filename: Path to the object file
+
+Returns:
+    Module handle as integer
+
+Raises:
+    RuntimeError: If loading fails)")
+      .def(
           "dump_to_object_file",
           [](wave::ExecutionEngine &self, const std::string &filename) {
             unwrapError(self.dumpToObjectFile(filename),

@@ -125,7 +125,10 @@ from .._support.tracing import CapturedTrace
 from ..compiler import host_codegen, kernel_codegen, builder, dispatch_codegen
 from ..compiler.wave_codegen import WaveEmitter
 from .compile_options import WaveCompileOptions
+from pathlib import Path
+
 from .cache import (
+    get_cache_base_dir,
     get_cache_manager,
     get_temp_binary_dir,
     is_cache_enabled,
@@ -416,8 +419,10 @@ class WaveKernelExecutionEngine:
             return
         self._engine = get_execution_engine()
         self._module_handle = self._engine.load_module_from_text(optimized_mlir)
+        self._bind_host_func()
 
-        # Look up the host wrapper function
+    def _bind_host_func(self):
+        """Look up the host wrapper function and create a ctypes callable."""
         func_name = self.options.func_name
         try:
             self._host_func_ptr = self._engine.lookup(self._module_handle, func_name)
@@ -429,13 +434,37 @@ class WaveKernelExecutionEngine:
 
         # Create ctypes function type
         # The host wrapper signature is: void func(void* stream, PyObject* arg0, PyObject* arg1, ...)
-
         num_kernel_args = len(self.options.kernel_usages)
         arg_types = [ctypes.c_void_p] + [
             py_object
         ] * num_kernel_args  # +1 for stream pointer
         func_type = ctypes.CFUNCTYPE(None, *arg_types)
         self._cfunc = func_type(self._host_func_ptr)
+
+    def dump_to_object_file(self, path: str):
+        """Dump the compiled host object file (with embedded GPU binary) to disk."""
+        assert self._engine is not None, "no execution engine to dump from"
+        self._engine.dump_to_object_file(path)
+
+    @classmethod
+    def from_object_file(
+        cls,
+        options: WaveCompileOptions,
+        object_file_path: str,
+        mlir_asm: str = "",
+    ) -> "WaveKernelExecutionEngine":
+        """Load a cached object file instead of compiling from MLIR."""
+        from wave_lang.kernel.wave.execution_engine import get_execution_engine
+
+        instance = cls.__new__(cls)
+        instance.options = options
+        instance.asm = mlir_asm
+        instance._engine = get_execution_engine()
+        instance._module_handle = instance._engine.load_from_object_file(
+            object_file_path
+        )
+        instance._bind_host_func()
+        return instance
 
     def __call__(self, *args):
         return self.invoke(*args)
@@ -1053,6 +1082,11 @@ def wave_compile(
         else:
             return glob.glob(str(get_temp_binary_dir() / "*.hsaco"))[0]
 
+    def _get_water_object_cache_path(kernel_hash: str) -> Path:
+        """Return the path for a cached Water object file."""
+        base = cache_manager.base_dir if cache_manager else get_cache_base_dir()
+        return base / kernel_hash / (kernel_hash + ".o")
+
     # Create an indexing context and populate substitutions.
     with IndexingContext() as idxc:
         idxc.set_subs(options.subs)
@@ -1077,22 +1111,32 @@ def wave_compile(
             if cached_kernel:
                 options.kernel_usages = cached_kernel.kernel_sig
                 options.kernel_launch_info = cached_kernel.kernel_launch_info
-                if options.wave_runtime:
-                    binary_path = get_binary_path()
 
                 if options.print_mlir:
                     print(cached_kernel.asm)
 
-                return cls(
-                    options,
-                    cached_kernel.vmfb,
-                    cached_kernel.asm,
-                    binary_path,
-                    bound_scalar_symbols,
-                    symbols_args_map,
-                    None,
-                    None,
-                )
+                if options.use_water_backend:
+                    obj_path = _get_water_object_cache_path(options.kernel_hash)
+                    if obj_path.exists():
+                        return WaveKernelExecutionEngine.from_object_file(
+                            options, str(obj_path), cached_kernel.asm
+                        )
+                    # Object file missing from cache, fall through
+                    # to recompilation.
+                else:
+                    if options.wave_runtime:
+                        binary_path = get_binary_path()
+
+                    return cls(
+                        options,
+                        cached_kernel.vmfb,
+                        cached_kernel.asm,
+                        binary_path,
+                        bound_scalar_symbols,
+                        symbols_args_map,
+                        None,
+                        None,
+                    )
 
         # For the wave runtime, we need the hsaco binary. So we turn on
         # dumping of binaries and store in wave runtime directory. If we
@@ -1229,12 +1273,25 @@ def wave_compile(
                 _compile_asm_to_binary(asm, options)
         elif options.use_water_backend:
             module = water_lowering_pipeline(mb.module_op, options)
-            return WaveKernelExecutionEngine(
+            engine = WaveKernelExecutionEngine(
                 options,
                 module,
                 asm,
                 create_execution_engine=not options.compile_to_mlir,
             )
+            # Cache the compiled object file for future runs.
+            if (
+                is_cache_enabled()
+                and cache_manager is not None
+                and options.kernel_hash
+                and not debug_arg_info
+                and not options.compile_to_mlir
+            ):
+                obj_path = _get_water_object_cache_path(options.kernel_hash)
+                obj_path.parent.mkdir(parents=True, exist_ok=True)
+                engine.dump_to_object_file(str(obj_path))
+                cache_manager.store_kernel(None, asm, options)
+            return engine
         elif not options.compile_to_mlir:
             # LLVM flow: only compile to VMFB when not in MLIR-only mode
             compiled_wave_vmfb = compile_to_vmfb(asm, options)
