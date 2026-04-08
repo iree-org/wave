@@ -1313,6 +1313,15 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
     is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
     is_bf16 = isinstance(element_type, BF16Type)
+    is_global_mem = not is_shared
+
+    if (
+        is_bf16
+        and is_global_mem
+        and emitter.options.use_buffer_ops
+        and emitter.options.backend == "asm"
+    ):
+        mask = None
 
     if not is_shared and is_bf16 and getattr(node, "_permlane_pack_global", False):
         _write_permlane_pack_to_global(

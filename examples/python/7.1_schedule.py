@@ -535,7 +535,7 @@ def test_benchmark_coalesce_epilogue(
 def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     is_debug=False,
     shape=(1024, 3072, 8192),
-    block=(256, 192, 256),
+    block=(128, 256, 256),
     eliminate_epilogue=False,
 ):
     """Preshuffle-B MXFP4 GEMM with dynamic M, N, K (WaveASM backend).
@@ -544,7 +544,7 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     the C++ WaveASM backend instead of LLVM.
     """
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
-        shape, block, wave_shape=(2, 2), reorder_workgroups=True,
+        shape, block, wave_shape=(1, 4), reorder_workgroups=True,
         output_dtype=tkl.bf16,
     )
     dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
@@ -557,7 +557,7 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     options.wave_runtime = True
     options.eliminate_epilogue = eliminate_epilogue
     options.coalesce_epilogue_stores = False
-    options.dump_intermediates = "build/intermediates/asm_256x192x256/"
+    options.dump_intermediates = "build/intermediates/asm_128x256x256/"
     schedule = get_mxfp4_asymmetric_schedule(
         eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
     )

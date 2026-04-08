@@ -971,6 +971,44 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return formatter.format("v_cvt_pk_bf16_f32", operands);
           })
 
+      // V_ACCVGPR_READ_B32: unroll multi-register reads into scalar ops
+      .Case<V_ACCVGPR_READ_B32>(
+          [&](V_ACCVGPR_READ_B32 readOp) -> std::optional<std::string> {
+            Value dst = readOp.getDst();
+            Value src = readOp.getSrc();
+            int64_t dstSize = getRegSize(dst.getType());
+            int64_t srcSize = getRegSize(src.getType());
+            int64_t size = std::max(dstSize, srcSize);
+            if (size <= 1) {
+              return emitDefaultFormat(readOp, "v_accvgpr_read_b32");
+            }
+            int64_t dstBase = -1, srcBase = -1;
+            if (auto pv = dyn_cast<PVRegType>(dst.getType()))
+              dstBase = pv.getIndex();
+            else if (isVirtualRegType(dst.getType()))
+              dstBase = mapping.getPhysReg(dst);
+            if (auto pa = dyn_cast<PARegType>(src.getType()))
+              srcBase = pa.getIndex();
+            else if (isVirtualRegType(src.getType()))
+              srcBase = mapping.getPhysReg(src);
+            if (dstBase < 0 || srcBase < 0) {
+              llvm::errs() << "V_ACCVGPR_READ_B32 fallback: dstBase=" << dstBase
+                           << " srcBase=" << srcBase
+                           << " dstSize=" << dstSize << " srcSize=" << srcSize
+                           << " dstType=" << dst.getType()
+                           << " srcType=" << src.getType() << "\n";
+              return emitDefaultFormat(readOp, "v_accvgpr_read_b32");
+            }
+            std::string lines;
+            for (int64_t i = 0; i < size; ++i) {
+              if (i > 0) lines += "\n";
+              lines += "  v_accvgpr_read_b32 v" +
+                       std::to_string(dstBase + i) + ", a" +
+                       std::to_string(srcBase + i);
+            }
+            return lines;
+          })
+
       // Carry ops: on GFX9, carry-out is implicit VCC.
       // v_add_co_u32:  dst, vcc, src0, src1
       // v_addc_co_u32: dst, vcc, src0, src1, vcc  (carry-in).
