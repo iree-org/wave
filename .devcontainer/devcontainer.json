@@ -1,3 +1,5 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
 	"name": "devcontainer",
 	"build": {
@@ -19,11 +21,15 @@
 	"capAdd": [
 		"SYS_PTRACE"
 	],
+	// Optional: enables memory mapping, recommended for containers running in HPC environments.
+	// See https://rocm.docs.amd.com/projects/install-on-linux/en/latest/how-to/docker.html
 	"securityOpt": [
 		"seccomp=unconfined"
 	],
 	"containerUser": "ubuntu",
 	"mounts": [
+		// Use a dedicated Docker volume for the venv to avoid conflicts with a local .venv
+		// and to improve performance by keeping it inside the container's filesystem.
 		"source=${localWorkspaceFolderBasename}-venv,target=${containerWorkspaceFolder}/.venv,type=volume"
 	],
 	"customizations": {

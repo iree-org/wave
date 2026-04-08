@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y \
         python${PYTHON_VERSION}-dev \
         python${PYTHON_VERSION}-venv \
+    # Clean up apt cache to reduce image size.
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p -m 755 /etc/apt/keyrings \
