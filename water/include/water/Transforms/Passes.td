@@ -171,4 +171,95 @@ def WaterMemrefDecompositionPass : Pass<"water-memref-decomposition"> {
   ];
 }
 
+def WaterComposeAffineArithPass : Pass<"water-compose-affine-arith"> {
+  let summary = "Compose arithmetic operations with affine.apply operations";
+  let description = [{
+    This pass folds integer arithmetic operations (addi, subi, muli) into
+    affine.apply operations when one operand is an affine.apply result and
+    the other is a constant. This reduces the number of operations and
+    enables better affine analysis.
+
+    Example:
+      %0 = affine.apply affine_map<(d0)[s0] -> (d0 + s0)>(%x)[%y]
+      %1 = arith.addi %0, %c4 : index
+
+    Transforms to:
+      %1 = affine.apply affine_map<(d0)[s0, s1] -> (d0 + s0 + s1)>(%x)[%y, %c4]
+  }];
+  let dependentDialects = [
+    "::mlir::affine::AffineDialect",
+    "::mlir::arith::ArithDialect",
+  ];
+}
+
+def WaterReorderAffinePass : Pass<"water-reorder-affine"> {
+  let summary = "Reorder affine.apply operands by hoistability";
+  let description = [{
+    This pass reorders the operands of affine.apply operations to improve
+    hoistability and enable better loop-invariant code motion. Operands
+    that are more likely to be loop-invariant are moved to symbol positions.
+  }];
+  let dependentDialects = [
+    "::mlir::affine::AffineDialect",
+  ];
+}
+
+def WaterReorderAffineExprsPass : Pass<"water-reorder-affine-exprs"> {
+  let summary = "Reorder commutative operations to maximize common subexpression elimination";
+  let description = [{
+    This pass analyzes affine expressions and reorders sequences of commutative
+    operations (add and mul) to maximize opportunities for common subexpression
+    elimination (CSE). It uses hash-based scoring that considers both the
+    expression structure and the actual operand Values to canonicalize equivalent
+    expressions.
+
+    The pass works in two phases:
+    1. Collects all affine.apply operations and builds hash statistics for
+       all sub-expressions encountered.
+    2. For each commutative operation, tries all permutations and selects
+       the ordering that maximizes hash hits (sum of occurrence counts).
+
+    The optimization is conservative: if the best score equals the original
+    score, the original form is preserved to avoid unnecessary changes.
+
+    Example:
+      %0 = affine.apply (d0 + d1 + d2)>(%a, %b, %c)
+      %1 = affine.apply (d2 + d0 + d1)>(%a, %b, %c)
+
+    Both expressions are canonicalized to the same form, enabling CSE to
+    eliminate the redundant computation.
+  }];
+  let dependentDialects = [
+    "::mlir::affine::AffineDialect",
+  ];
+}
+
+def WaterReorderAffineExprsByRangePass : Pass<"water-reorder-affine-exprs-by-range"> {
+  let summary = "Reorder commutative operations to minimize intermediate result widths";
+  let description = [{
+    This pass analyzes affine expressions and reorders sequences of commutative
+    operations (add and mul) to minimize the bit width of intermediate results.
+    It uses integer range analysis to infer the range of each operand and
+    subexpression, then tries all permutations to find the ordering that
+    minimizes the maximum intermediate width.
+
+    This can reduce register pressure and improve performance by keeping
+    intermediate values as small as possible during computation.
+
+    Example:
+      Given: a + b + c where ranges are:
+        a: [0, 10]
+        b: [0, 100]
+        c: [0, 5]
+
+      Original: (a + b) + c gives intermediate [0, 110], then [0, 115]
+      Optimized: (a + c) + b gives intermediate [0, 15], then [0, 115]
+
+      The optimized version has a smaller maximum intermediate width (15 vs 110).
+  }];
+  let dependentDialects = [
+    "::mlir::affine::AffineDialect",
+  ];
+}
+
 #endif // WATER_PASSES
