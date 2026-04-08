@@ -1077,9 +1077,7 @@ def _handle_read_linear_index(
         # so numerics match across IREE and wave runtime.  When
         # eliminate_epilogue is active, OOB prefetch reads need
         # hardware bounds checking to avoid faults.
-        linear_buffer_ops = (
-            buffer_ops_enabled and emitter.options.eliminate_epilogue
-        )
+        linear_buffer_ops = emitter.options.eliminate_epilogue
         lin_src = _linear_read_linearize_memref_maybe_hoisted(
             emitter,
             kb_src,

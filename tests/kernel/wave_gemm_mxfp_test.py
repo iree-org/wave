@@ -981,11 +981,13 @@ def testScaledGemmMXFP4PreshuffleBDynamic(
     "mfma_variant",
     [ScaledMMAType.F32_16x16x128_F8F6F4],
 )
+@pytest.mark.parametrize("eliminate_epilogue", [True, False])
 def testScaledGemmMXFP4PreshuffleBDynamicWaveRuntime(
     shape: tuple[int, int, int],
     block_shape: tuple[int, int, int],
     wave_shape: tuple[int, int],
     mfma_variant: ScaledMMAType,
+    eliminate_epilogue: bool,
 ):
     """E2e MXFP4 preshuffle-B with wave runtime, dynamic dims, and epilogue elimination.
 
@@ -1002,9 +1004,9 @@ def testScaledGemmMXFP4PreshuffleBDynamicWaveRuntime(
     for sym in dynamic_symbols:
         del options.subs[sym]
     options.dynamic_symbols = dynamic_symbols
-    options.eliminate_epilogue = True
+    options.eliminate_epilogue = eliminate_epilogue
     schedule = get_mxfp4_asymmetric_schedule(
-        eliminate_epilogue=True, is_bscale_shuffled=True
+        eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
     )
     options.use_buffer_ops = True
     options.backend = "llvm"
