@@ -3,16 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 """
-Graph pass that coalesces epilogue bf16 stores via permlane16_swap.
+Graph pass that tags eligible epilogue bf16 stores for wide store coalescing.
 
-Marks eligible Write nodes so the codegen combines each thread's 4 bf16
-values with its partner lane's (16 lanes apart) via v_permlane16_swap_b32,
-producing 8 consecutive bf16 written as a single buffer_store_dwordx4.
-No LDS staging or barriers required.
+When a kernel uses swapped MFMA operands (wide_stores=True), the
+accumulator's 4-contiguous values align with the output's stride-1
+dimension. This pass identifies Write nodes that use the source/target
+dimension remapping pattern (indicating swapped operands) and tags them
+so the codegen emits v_permlane16_swap_b32 + buffer_store_dwordx4
+instead of scalar buffer_store_short.
 
-Precondition: the output memory must have M as the innermost (contiguous)
-dimension (i.e. transpose_output=True producing [N, M] layout) so that 8
-consecutive bf16 elements span 8 adjacent M rows.
+Only tags writes that satisfy ALL conditions:
+  1. Target memory is global address space
+  2. Output dtype is bf16
+  3. Write uses source/target syntax (swapped-operand layout)
 """
 
 from .._support.tracing import CapturedTrace
@@ -24,11 +27,12 @@ from .utils.symbol_utils import subs_idxc
 
 @requires_region_format(RegionFormat.SCHEDULE_SIGNATURE_PLACEHOLDERS)
 def coalesce_epilogue_stores(trace: CapturedTrace):
-    """Tag epilogue bf16 global writes for permlane16_swap packing.
+    """Tag eligible bf16 global writes for permlane16_swap wide stores.
 
-    Walks the root graph and sets ``_permlane_pack_global = True`` on
-    every Write node that targets global memory with bf16 dtype.
-    The codegen in ``_write_permlane_pack_to_global`` handles the rest.
+    Only tags Write nodes that use the source/target dimension remapping
+    pattern, which indicates the kernel was built with ``wide_stores=True``
+    (swapped MFMA operands). Writes without source/target are left
+    untouched, making this pass safe to run unconditionally.
     """
     import wave_lang.kernel.lang as tkl
 
@@ -39,6 +43,8 @@ def coalesce_epilogue_stores(trace: CapturedTrace):
             continue
         custom = get_custom(node)
         if not isinstance(custom, Write):
+            continue
+        if custom.source is None or custom.target is None:
             continue
         mem_type = custom.memory_type
         if (

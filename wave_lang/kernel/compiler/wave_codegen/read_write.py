@@ -5,9 +5,9 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import functools
+import math
 from typing import Any, Optional
 
-import math
 import sympy
 import torch.fx as fx
 
@@ -35,9 +35,6 @@ from wave_lang.support.ir_imports import (
     rocdl_d,
     vector_d,
 )
-from .ir_utils import (
-    is_float_type,
-)
 
 from ..._support.indexing import (
     IndexExpr,
@@ -46,28 +43,30 @@ from ..._support.indexing import (
     IndexSymbol,
     subs_idxc,
 )
-from ..base import ValidationError
-from ..builder import IRProxyValue
-from ..utils import (
-    strides_from_symbolic_shape,
-    symbolic_strides_match_physical_memory as _symbolic_strides_match_physical,
-)
 from ...lang.global_symbols import *
 from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
     CustomOp,
+    MemoryAccessFlags,
     gather_to_lds,
-    tensor_load_to_lds,
     get_custom,
     read,
-    write,
-    scatter_add,
     read_meets_hw_transpose_requirements,
-    MemoryAccessFlags,
+    scatter_add,
+    tensor_load_to_lds,
+    write,
 )
 from ...wave.utils.general_utils import get_fastest_index, infer_dim, linearize_index
 from ...wave.utils.mapping_utils import transform_index_on_mapping
 from ...wave.utils.symbol_utils import safe_subs, simplify
+from ..base import ValidationError
+from ..builder import IRProxyValue
+from ..utils import (
+    strides_from_symbolic_shape,
+)
+from ..utils import (
+    symbolic_strides_match_physical_memory as _symbolic_strides_match_physical,
+)
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
@@ -79,6 +78,9 @@ from .emitter import (
     get_constant_attr,
     get_type_or_element_type,
     handle_op,
+)
+from .ir_utils import (
+    is_float_type,
 )
 
 
@@ -1311,31 +1313,21 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
     use_llvm_store = flags != MemoryAccessFlags.NONE
 
-    is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
-    is_bf16 = isinstance(element_type, BF16Type)
-    is_global_mem = not is_shared
-
-    if (
-        is_bf16
-        and is_global_mem
-        and emitter.options.use_buffer_ops
-        and emitter.options.backend == "asm"
-    ):
-        mask = None
-
-    if not is_shared and is_bf16 and getattr(node, "_permlane_pack_global", False):
-        _write_permlane_pack_to_global(
-            emitter,
-            insert_vector,
-            kb_dest,
-            output_shape,
-            start_indices,
-            start_indices_wg,
-            start_indices_th,
-            get_custom(memory),
-            index,
-        )
-        return
+    if getattr(node, "_permlane_pack_global", False):
+        is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
+        if not is_shared and isinstance(element_type, BF16Type):
+            _write_permlane_pack_to_global(
+                emitter,
+                insert_vector,
+                kb_dest,
+                output_shape,
+                start_indices,
+                start_indices_wg,
+                start_indices_th,
+                get_custom(memory),
+                index,
+            )
+            return
 
     if use_llvm_store:
         _create_llvm_read_write(
@@ -1371,26 +1363,27 @@ def _write_permlane_pack_to_global(
 ):
     """Pack two lanes' bf16 values via permlane16_swap for wide global stores.
 
-    MMA accumulator layout (F32_16x16x128_F8F6F4) gives each thread 4
-    consecutive M values.  Lanes are grouped by 16: lanes 0-15 own M=0-3,
-    lanes 16-31 own M=4-7, etc.  ``v_permlane16_swap_b32`` exchanges data
-    between paired groups, giving each lane 8 consecutive M values that
-    can be written as a single ``buffer_store_dwordx4`` (128 bits).
+    Uses ``v_permlane16_swap_b32`` to exchange each thread's 4 bf16 values
+    (packed as 2 i32 dwords) with a partner lane 16 positions apart.
+    The result is 8 consecutive bf16 values per lane, written as a single
+    ``buffer_store_dwordx4`` (128 bits).
 
-    Both lane halves produce identical data at the same address (benign
-    duplicate store):
+    Both lane halves write identical data to the same address (benign
+    duplicate store), avoiding divergent control flow. The buffer
+    descriptor's ``valid_bytes`` handles out-of-bounds suppression.
 
-      - Lower half (lanes 0-15 in each 32-lane group):
-        data = [own, partner], address = thread's original M index.
-      - Upper half (lanes 16-31):
-        data = [partner, own], address = original M index - 4.
+    Preconditions:
+      - The kernel must use swapped MFMA operands (B as LHS, A as RHS)
+        so the accumulator's 4-contiguous values align with the output
+        memory's stride-1 dimension.
+      - The Write node must be tagged with ``_permlane_pack_global=True``
+        by the ``coalesce_epilogue_stores`` pass.
 
-    This dual-write avoids divergent control flow (no scf.if / exec
-    masking needed).  The buffer descriptor's ``valid_bytes`` handles
-    out-of-bounds suppression for dynamic shapes.
-
-    Precondition: M must be the innermost (last) memory dimension with
-    stride 1 (i.e. transpose_output=True, shape [N, M]).
+    .. note::
+        Currently assumes F32_16x16x128_F8F6F4 MMA layout (4 values
+        along MMA-M per thread, 16-lane groups). Generalizing to other
+        MMA types requires parameterizing the lane group size and
+        elements per thread.
     """
     bf16_type = BF16Type.get()
     i32_type = IntegerType.get_signless(32)
