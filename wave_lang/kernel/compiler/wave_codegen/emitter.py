@@ -633,9 +633,12 @@ def add_emitter_subs(
 
 _emulate_ceildiv = bool(int(environ.get("WAVE_EMULATE_CEILDIV", 0)))
 _use_affine_expr = bool(int(environ.get("WAVE_USE_AFFINE_EXPR", 1)))
+_magic_number_enabled = bool(int(environ.get("WAVE_MAGIC_NUMBER_DIV", 1)))
 
 _Rational = namedtuple("_Rational", ["numerator", "denominator"])
 _ApplyExpr = namedtuple("_ApplyExpr", ["expr", "args"])
+
+_magic_number_cache: dict = {}
 
 
 def _group_same_denom_fractions(expr):
@@ -745,6 +748,26 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
         return None
 
+    def _same_value(a, b) -> bool:
+        """Structural equality for emitter values (_ApplyExpr / OpResult).
+
+        Detects when two independently-built IR values represent the same
+        computation.  Used in _add to avoid denominator explosion when
+        adding _Rationals that share a common denominator.
+        """
+        if isinstance(a, _ApplyExpr) and isinstance(b, _ApplyExpr):
+            if a.expr != b.expr or len(a.args) != len(b.args):
+                return False
+            return all(_same_value(x, y) for x, y in zip(a.args, b.args))
+        if isinstance(a, (Value, OpResult)) and isinstance(b, (Value, OpResult)):
+            if a is b:
+                return True
+            a_val = get_const_val(a)
+            b_val = get_const_val(b)
+            if a_val is not None and b_val is not None:
+                return a_val == b_val
+        return False
+
     overflow_flags = arith_d.IntegerOverflowFlags.nsw | arith_d.IntegerOverflowFlags.nuw
 
     def muli(lhs, rhs):
@@ -809,15 +832,104 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
         return op_expr(lhs, rhs, lambda a, b: a * b)
 
+    def _is_dynamic_divisor(val) -> bool:
+        """Check if a value is NOT a compile-time constant."""
+        if isinstance(val, _ApplyExpr):
+            if all(
+                isinstance(a, OpResult) and get_const_val(a) is not None
+                for a in val.args
+            ):
+                return False
+            val = _get_ir_value(val)
+        if isinstance(val, OpResult):
+            return get_const_val(val) is None
+        return True
+
+    def _mulhi_u32(n_i32, m_i32):
+        """Unsigned 32-bit multiply-high: (n * m) >> 32, via 64-bit multiply."""
+        i64 = IntegerType.get_signless(64)
+        c32_i64 = arith_d.constant(i64, 32)
+        n_i64 = arith_d.extui(i64, n_i32)
+        m_i64 = arith_d.extui(i64, m_i32)
+        prod_i64 = arith_d.muli(n_i64, m_i64)
+        hi_i64 = arith_d.shrui(prod_i64, c32_i64)
+        i32 = IntegerType.get_signless(32)
+        return arith_d.trunci(i32, hi_i64)
+
+    def _precompute_magic_number(divisor_index: Value):
+        """
+        Compute magic = ceil(2^32 / d) from a dynamic divisor.
+        Returns (magic_i32, d_i32) both as i32 Values.
+        """
+        i32 = IntegerType.get_signless(32)
+        i64 = IntegerType.get_signless(64)
+        d_i32 = arith_d.index_cast(i32, divisor_index)
+        d_i64 = arith_d.extui(i64, d_i32)
+        c1_i64 = arith_d.constant(i64, 1)
+        c32_i64 = arith_d.constant(i64, 32)
+        pow32 = arith_d.shli(c1_i64, c32_i64)
+        d_minus_1_i64 = arith_d.subi(d_i64, c1_i64)
+        numer_i64 = arith_d.addi(pow32, d_minus_1_i64)
+        magic_i64 = arith_d.divui(numer_i64, d_i64)
+        magic_i32 = arith_d.trunci(i32, magic_i64)
+        return magic_i32, d_i32
+
+    def _get_or_create_magic(divisor: Value):
+        """Get cached (magic_i32, d_i32) or compute and cache them."""
+        key = id(divisor)
+        if key in _magic_number_cache:
+            return _magic_number_cache[key]
+        magic_i32, d_i32 = _precompute_magic_number(divisor)
+        _magic_number_cache[key] = (magic_i32, d_i32)
+        return magic_i32, d_i32
+
+    def _magic_div_and_rem(lhs_val, rhs_val):
+        """
+        Compute (quotient, remainder) of lhs_val // rhs_val using
+        magic number multiplication: q = mulhi(n, magic), with a
+        one-step correction for exactness.
+        Returns (quotient_index, remainder_index).
+        """
+        i32 = IntegerType.get_signless(32)
+        magic_i32, d_i32 = _get_or_create_magic(rhs_val)
+        n_i32 = arith_d.index_cast(i32, lhs_val)
+        q_i32 = _mulhi_u32(n_i32, magic_i32)
+        qd_i32 = arith_d.muli(q_i32, d_i32)
+        r_i32 = arith_d.subi(n_i32, qd_i32)
+        # Correction: ceil(2^32/d) can overestimate quotient by 1.
+        # Detect via unsigned remainder >= divisor (wraps on overestimate).
+        too_big = arith_d.cmpi(arith_d.CmpIPredicate.uge, r_i32, d_i32)
+        c1_i32 = arith_d.constant(i32, 1)
+        c0_i32 = arith_d.constant(i32, 0)
+        corr = arith_d.select(too_big, c1_i32, c0_i32)
+        q_final = arith_d.subi(q_i32, corr)
+        d_or_zero = arith_d.select(too_big, d_i32, c0_i32)
+        r_final = arith_d.addi(r_i32, d_or_zero)
+        q_index = arith_d.index_cast(IndexType.get(), q_final)
+        r_index = arith_d.index_cast(IndexType.get(), r_final)
+        return q_index, r_index
+
     def rem_expr(lhs, rhs):
         if not use_affine_expr or not check_index_types(lhs, rhs):
             return arith_d.remsi(*_broadcast(lhs, rhs))
+
+        if _magic_number_enabled and _is_dynamic_divisor(rhs):
+            lhs_val = _get_ir_value(lhs) if isinstance(lhs, _ApplyExpr) else lhs
+            rhs_val = _get_ir_value(rhs) if isinstance(rhs, _ApplyExpr) else rhs
+            _, r = _magic_div_and_rem(lhs_val, rhs_val)
+            return r
 
         return op_expr(lhs, rhs, lambda a, b: a % b)
 
     def floordiv_expr(lhs, rhs):
         if not use_affine_expr or not check_index_types(lhs, rhs):
             return arith_d.divsi(*_broadcast(lhs, rhs))
+
+        if _magic_number_enabled and _is_dynamic_divisor(rhs):
+            lhs_val = _get_ir_value(lhs) if isinstance(lhs, _ApplyExpr) else lhs
+            rhs_val = _get_ir_value(rhs) if isinstance(rhs, _ApplyExpr) else rhs
+            q, _ = _magic_div_and_rem(lhs_val, rhs_val)
+            return q
 
         return op_expr(lhs, rhs, lambda a, b: AffineExpr.get_floor_div(a, b))
 
@@ -851,6 +963,9 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
             numerator = add_expr(numerator, rhs.numerator)
             return _Rational(numerator, rhs.denominator)
         elif is_rational_lhs and is_rational_rhs:
+            if _same_value(lhs.denominator, rhs.denominator):
+                numerator = add_expr(lhs.numerator, rhs.numerator)
+                return _Rational(numerator, lhs.denominator)
             lhs_numerator = muli_expr(lhs.numerator, rhs.denominator)
             rhs_numerator = muli_expr(rhs.numerator, lhs.denominator)
             numerator = add_expr(lhs_numerator, rhs_numerator)
