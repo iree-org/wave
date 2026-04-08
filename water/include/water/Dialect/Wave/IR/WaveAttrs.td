@@ -649,7 +649,7 @@ def WaveSymbolMappingAttr : AttrDef<WaveDialect, "WaveSymbolMapping"> {
       return [](::mlir::Attribute instance,
                 ::llvm::function_ref<void(::mlir::Attribute)> walkAttrsFn,
                 ::llvm::function_ref<void(::mlir::Type)>) {
-        for (auto &[key, value] :
+        for (auto &&[key, value] :
              ::llvm::cast<WaveSymbolMappingAttr>(instance).getMapping()) {
           walkAttrsFn(key);
           walkAttrsFn(value);
