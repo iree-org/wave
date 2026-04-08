@@ -360,9 +360,9 @@ def testScaledBatchedGemmMXFP4Codegen(use_water_backend: bool, tmp_path: Path):
     # We encode the exact registers and wait counts as we want to know if
     # they suddenly change due to backend or upstream MLIR changes.
     if use_water_backend:
-        vgpr_count = 172
+        vgpr_count = 164
         vgpr_spill_count = 0
-        sgpr_count = 61
+        sgpr_count = 57
         sgpr_spill_count = 0
         waitcounts = [
             "s_waitcnt lgkmcnt(0)",
@@ -1023,6 +1023,64 @@ def testScaledGemmMXFP4PreshuffleBDynamicWaveRuntime(
     w_scales_ps = e8m0_shuffle(w_scales)
 
     out = device_zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.float32)
+    gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
+
+    torch.testing.assert_close(torch_out, out, check_dtype=False)
+
+
+@require_e2e
+@require_cdna4
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    "shape",
+    [(1024, 3072, 8192)],
+)
+@pytest.mark.parametrize(
+    "block_shape,wave_shape",
+    [((256, 192, 256), (2, 2))],
+)
+@pytest.mark.parametrize(
+    "mfma_variant",
+    [ScaledMMAType.F32_16x16x128_F8F6F4],
+)
+def testScaledGemmMXFP4PreshuffleBWideStores(
+    shape: tuple[int, int, int],
+    block_shape: tuple[int, int, int],
+    wave_shape: tuple[int, int],
+    mfma_variant: ScaledMMAType,
+):
+    """End-to-end test for MXFP4 GEMM with wide epilogue stores (dwordx4).
+
+    Uses wide_stores=True to swap MFMA operands and emit buffer_store_dwordx4
+    via v_permlane16_swap_b32 for bf16 output.
+    """
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+        shape,
+        block_shape,
+        wave_shape=wave_shape,
+        mfma_variant=mfma_variant,
+        reorder_workgroups=True,
+        output_dtype=tkl.bf16,
+        wide_stores=True,
+    )
+    dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+    for sym in dynamic_symbols:
+        del options.subs[sym]
+    options.dynamic_symbols = dynamic_symbols
+    schedule = get_mxfp4_asymmetric_schedule(is_bscale_shuffled=True)
+    options.use_buffer_ops = True
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+
+    w_t = w.T.contiguous()
+    w_t_ps = b_preshuffle(w_t)
+    x_scales_ps = e8m0_shuffle(x_scales)
+    w_scales_ps = e8m0_shuffle(w_scales)
+
+    out = device_zeros(x.shape[0], w_t_ps.shape[0], dtype=torch.bfloat16)
     gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
 
     torch.testing.assert_close(torch_out, out, check_dtype=False)

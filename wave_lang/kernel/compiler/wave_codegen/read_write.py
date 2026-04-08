@@ -5,15 +5,16 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import functools
+import math
 from typing import Any, Optional
 
-import math
 import sympy
 import torch.fx as fx
 
 from wave_lang.kernel.wave.utils.graph_utils import propagate_loop_carried_vars
 from wave_lang.support.ir_imports import (
     Attribute,
+    BF16Type,
     DenseElementsAttr,
     IndexType,
     InsertionPoint,
@@ -31,10 +32,8 @@ from wave_lang.support.ir_imports import (
     gpu_d,
     llvm_d,
     memref_d,
+    rocdl_d,
     vector_d,
-)
-from .ir_utils import (
-    is_float_type,
 )
 
 from ..._support.indexing import (
@@ -44,28 +43,30 @@ from ..._support.indexing import (
     IndexSymbol,
     subs_idxc,
 )
-from ..base import ValidationError
-from ..builder import IRProxyValue
-from ..utils import (
-    strides_from_symbolic_shape,
-    symbolic_strides_match_physical_memory as _symbolic_strides_match_physical,
-)
 from ...lang.global_symbols import *
 from ...lang.wave_types import IndexMapping
 from ...ops.wave_ops import (
     CustomOp,
+    MemoryAccessFlags,
     gather_to_lds,
-    tensor_load_to_lds,
     get_custom,
     read,
-    write,
-    scatter_add,
     read_meets_hw_transpose_requirements,
-    MemoryAccessFlags,
+    scatter_add,
+    tensor_load_to_lds,
+    write,
 )
 from ...wave.utils.general_utils import get_fastest_index, infer_dim, linearize_index
 from ...wave.utils.mapping_utils import transform_index_on_mapping
 from ...wave.utils.symbol_utils import safe_subs, simplify
+from ..base import ValidationError
+from ..builder import IRProxyValue
+from ..utils import (
+    strides_from_symbolic_shape,
+)
+from ..utils import (
+    symbolic_strides_match_physical_memory as _symbolic_strides_match_physical,
+)
 from .emitter import (
     WaveEmitter,
     add_emitter_subs,
@@ -77,6 +78,9 @@ from .emitter import (
     get_constant_attr,
     get_type_or_element_type,
     handle_op,
+)
+from .ir_utils import (
+    is_float_type,
 )
 
 
@@ -685,16 +689,7 @@ def _create_vec_read_write(
     else:
         strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
 
-    # With the waveasm backend (non-water path), allow masked loads even
-    # with buffer ops.  The mask computation may fail to translate
-    # (vector<Nxindex> ops are unsupported), but the backend loads
-    # unconditionally in that case, relying on hardware OOB checking
-    # (SRD boundsCheck) to return zero.  The water+waveasm path goes
-    # through TranslateFromLLVMDialect which lacks vector op support,
-    # so masked loads must stay disabled there.
-    no_masked_load_store_ops = buffer_ops_enabled and (
-        emitter.options.backend != "asm" or emitter.options.use_water_backend
-    )
+    no_masked_load_store_ops = buffer_ops_enabled
 
     mask_splat = _get_splat_input(mask)
     splatted_mask = mask_splat is not None
@@ -1318,6 +1313,23 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
     )
 
     use_llvm_store = flags != MemoryAccessFlags.NONE
+
+    if getattr(node, "_permlane_pack_global", False):
+        is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
+        if not is_shared and isinstance(element_type, BF16Type):
+            _write_permlane_pack_to_global(
+                emitter,
+                insert_vector,
+                kb_dest,
+                output_shape,
+                start_indices,
+                start_indices_wg,
+                start_indices_th,
+                get_custom(memory),
+                index,
+            )
+            return
+
     if use_llvm_store:
         _create_llvm_read_write(
             kb_dest, kb_ir_type, start_indices, insert_type, flags, insert_vector
@@ -1337,6 +1349,100 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
             mask,
             node_index=index,
         )
+
+
+def _write_permlane_pack_to_global(
+    emitter: WaveEmitter,
+    insert_vector: Value,
+    kb_dest: Value,
+    output_shape: tuple,
+    start_indices: tuple,
+    start_indices_wg: tuple,
+    start_indices_th: tuple,
+    memory_custom,
+    index: dict,
+):
+    """Pack two lanes' bf16 values via permlane16_swap for wide global stores.
+
+    Uses ``v_permlane16_swap_b32`` to exchange each thread's 4 bf16 values
+    (packed as 2 i32 dwords) with a partner lane 16 positions apart.
+    The result is 8 consecutive bf16 values per lane, written as a single
+    ``buffer_store_dwordx4`` (128 bits).
+
+    Both lane halves write identical data to the same address (benign
+    duplicate store), avoiding divergent control flow. The buffer
+    descriptor's ``valid_bytes`` handles out-of-bounds suppression.
+
+    Preconditions:
+      - The kernel must use swapped MFMA operands (B as LHS, A as RHS)
+        so the accumulator's 4-contiguous values align with the output
+        memory's stride-1 dimension.
+      - The Write node must be tagged with ``_permlane_pack_global=True``
+        by the ``coalesce_epilogue_stores`` pass.
+
+    .. note::
+        Currently assumes F32_16x16x128_F8F6F4 MMA layout (4 values
+        along MMA-M per thread, 16-lane groups). Generalizing to other
+        MMA types requires parameterizing the lane group size and
+        elements per thread.
+    """
+    bf16_type = BF16Type.get()
+    i32_type = IntegerType.get_signless(32)
+    idx_type = IndexType.get()
+    v2i32_type = VectorType.get([2], i32_type)
+    v4i32_type = VectorType.get([4], i32_type)
+    v8bf16_type = VectorType.get([8], bf16_type)
+
+    i32_vec = vector_d.bitcast(v2i32_type, insert_vector)
+    own_lo = vector_d.extract(i32_vec, static_position=[0], dynamic_position=[])
+    own_hi = vector_d.extract(i32_vec, static_position=[1], dynamic_position=[])
+
+    swap_type = llvm_d.StructType.get_literal([i32_type, i32_type])
+    partner_lo = llvm_d.extractvalue(
+        i32_type, rocdl_d.permlane16_swap(swap_type, own_lo, own_lo, False, False), [0]
+    )
+    partner_hi = llvm_d.extractvalue(
+        i32_type, rocdl_d.permlane16_swap(swap_type, own_hi, own_hi, False, False), [0]
+    )
+
+    lane_in_wave = arith_d.remui(emitter.thread_ids[0], arith_d.constant(idx_type, 64))
+    half_pos = arith_d.remui(lane_in_wave, arith_d.constant(idx_type, 32))
+    is_lower = arith_d.cmpi(
+        arith_d.CmpIPredicate.ult, half_pos, arith_d.constant(idx_type, 16)
+    )
+
+    d0 = arith_d.select(is_lower, own_lo, partner_lo)
+    d1 = arith_d.select(is_lower, own_hi, partner_hi)
+    d2 = arith_d.select(is_lower, partner_lo, own_lo)
+    d3 = arith_d.select(is_lower, partner_hi, own_hi)
+
+    wide_i32 = vector_d.from_elements(v4i32_type, [d0, d1, d2, d3])
+    wide_vec = vector_d.bitcast(v8bf16_type, wide_i32)
+
+    four = arith_d.constant(idx_type, 4)
+
+    adj_th = list(start_indices_th)
+    adj_th[-1] = arith_d.select(is_lower, adj_th[-1], arith_d.subi(adj_th[-1], four))
+
+    adj_full = list(start_indices)
+    adj_full[-1] = arith_d.select(
+        is_lower, adj_full[-1], arith_d.subi(adj_full[-1], four)
+    )
+
+    _create_vec_read_write(
+        emitter,
+        output_shape,
+        kb_dest,
+        wide_vec,
+        None,
+        tuple(adj_full),
+        start_indices_wg,
+        tuple(adj_th),
+        8,
+        memory_custom,
+        None,
+        node_index=index,
+    )
 
 
 def assume_index_subgroup_uniform(value: Value, element_type: IrType) -> Value:

@@ -1,21 +1,19 @@
-import glob
-from itertools import chain
-from typing import Any, Optional, Callable, Sequence
-
-import sympy
-from sympy.utilities.lambdify import lambdastr
-import torch
 import ctypes
+import glob
 from ctypes import py_object
+from itertools import chain
+from typing import Any, Callable, Optional, Sequence
+
+import iree.runtime as rt
+import sympy
+import torch
+from sympy.utilities.lambdify import lambdastr
+
+from wave_lang.kernel.lang.global_symbols import *
+from wave_lang.runtime.launch import Launchable
+from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
 
 from ...support.ir_imports import (
-    Module,
-    stream_d,
-    Context,
-    Operation,
-    Location,
-    InsertionPoint,
-    builtin_d,
     Block,
     BlockArgument,
     Context,
@@ -30,6 +28,17 @@ from ...support.ir_imports import (
     builtin_d,
     stream_d,
 )
+from ...support.location_config import LocationCaptureLevel
+
+# Support.
+from .._support.indexing import IndexingContext, safe_subs
+from .._support.tracing import CapturedTrace
+from ..compiler import builder, dispatch_codegen, host_codegen, kernel_codegen
+from ..compiler.wave_codegen import WaveEmitter
+from ..lang import IndexSymbol
+from ..lang.grid import Grid
+from .analysis.annotate_iv_strides import annotate_iv_strides
+from .analysis.flatten_read_indices import flatten_read_indices
 
 # Passes
 from .analysis.index_sequence_analysis import (
@@ -37,8 +46,6 @@ from .analysis.index_sequence_analysis import (
     set_node_indices_water_checked,
     set_post_expansion_indices,
 )
-from .analysis.annotate_iv_strides import annotate_iv_strides
-from .analysis.flatten_read_indices import flatten_read_indices
 from .analysis.partition_strided_operators import (
     merge_contiguous_reads,
     partition_gather_like_ops,
@@ -47,12 +54,18 @@ from .analysis.partition_strided_operators import (
     simplify_indices,
 )
 from .barriers import add_shared_memory_barriers
+from .cache import (
+    get_cache_manager,
+    get_temp_binary_dir,
+    is_cache_enabled,
+)
 from .cluster_barriers import add_cluster_barriers
+from .compile_options import WaveCompileOptions
 from .construct_index_mapping import construct_index_mapping
 from .debug_log_hoist import (
+    DebugArgInfo,
     debug_log_hoist,
     debug_log_write_replace,
-    DebugArgInfo,
 )
 from .decompose_dot_mma import decompose_dot_mma
 from .decompose_reduce_ops import decompose_reduce_ops
@@ -68,11 +81,14 @@ from .global_to_shared_gathers import global_to_shared_gathers
 from .hardware_transpose import mark_hardware_transpose_candidates
 from .hoisting import hoist_loop_invariant_ops
 from .in_thread_transpose import in_thread_transpose
+from .iree_utils import warn_iree_is_too_old
 from .location_check_pass import location_check_pass
 from .memory_analysis.minimize_shared_allocs import minimize_shared_allocs
 from .minimize_global_loads import minimize_global_loads
-from .preshuffle_scale_to_shared import preshuffle_scale_to_shared
 from .multicast import multicast
+from .opsel_scaled_mfma import apply_opsel_scaled_mfma
+from .preshuffle_scale_to_shared import preshuffle_scale_to_shared
+from .profiling import benchmark_module
 from .promotion import compute_shared_memory_usage, promote_placeholders
 from .region_canonicalization import (
     RegionFormat,
@@ -90,16 +106,12 @@ from .shared_memory_indexing import apply_shared_memory_indexing_corrections
 from .specialize import specialize_kernel
 from .tensor_load_to_shared import tensor_load_to_shared
 from .type_inference import infer_types
-from .wave_schedule import WaveSchedule
-from .workgroup_reordering import reorder_workgroups
-from .opsel_scaled_mfma import apply_opsel_scaled_mfma
 
 # Utilities.
-from .utils.compile_utils import canonicalize_module, apply_transform, compile_to_vmfb
+from .utils.compile_utils import apply_transform, canonicalize_module, compile_to_vmfb
 from .utils.general_utils import (
     get_hardware_constraint,
     partial,
-    remove_files_with_extension,
     remove_files_with_extension,
     wave_dtype_to_torch,
 )
@@ -108,46 +120,21 @@ from .utils.graph_utils import (
     remove_chained_extractslice,
     remove_chained_getresult,
 )
-from .utils.run_utils import (
-    write_file,
-    print_bench_result,
-    invoke_with_wave_runtime,
-    get_benchmark_flags,
-)
 from .utils.print_utils import print_trace, try_apply_pass
-
-# Support.
-from .._support.indexing import IndexingContext, safe_subs
-from ...support.location_config import LocationCaptureLevel
-from .._support.tracing import CapturedTrace
-
-
-from ..compiler import host_codegen, kernel_codegen, builder, dispatch_codegen
-from ..compiler.wave_codegen import WaveEmitter
-from .compile_options import WaveCompileOptions
-from .cache import (
-    get_cache_manager,
-    get_temp_binary_dir,
-    is_cache_enabled,
+from .utils.run_utils import (
+    get_benchmark_flags,
+    invoke_with_wave_runtime,
+    print_bench_result,
+    write_file,
 )
-
 from .water import (
     water_leak_in_bounds_check,
     water_lowering_pipeline,
     water_waveasm_lowering_pipeline,
 )
-from wave_lang.runtime.launch import Launchable
-from wave_lang.runtime.multi_device_launch import MultiDeviceLaunchable
 from .wave import LaunchableWave
-from wave_lang.kernel.lang.global_symbols import *
-from .profiling import benchmark_module
-from .debug_log_hoist import DebugArgInfo
-
-from ..lang import IndexSymbol
-from ..lang.grid import Grid
-from .iree_utils import warn_iree_is_too_old
-
-import iree.runtime as rt
+from .wave_schedule import WaveSchedule
+from .workgroup_reordering import reorder_workgroups
 
 
 class WaveKernel:
@@ -542,6 +529,10 @@ def build_graph_passes(
         partial(decompose_scan_ops, trace, launchable.constraints),
         partial(decompose_topk_ops, trace, launchable.constraints),
     ]
+
+    from .wide_store_coalescing import coalesce_wide_stores
+
+    graph_passes.append(partial(coalesce_wide_stores, trace))
 
     graph_passes += [
         partial(simplify_indices, trace, launchable.constraints),
@@ -1294,9 +1285,11 @@ def _generate_asm_code(mb, options):
     import os
     import subprocess
     import tempfile
-    from wave_lang.support.ir_imports import Context, Module, func_d
+
     from wave_lang.support.detect_waveasm import get_waveasm_translate
-    from .utils.mlir_analysis import walk_ops_recursively, should_skip_function
+    from wave_lang.support.ir_imports import Context, Module, func_d
+
+    from .utils.mlir_analysis import should_skip_function, walk_ops_recursively
 
     mlir_asm = mb.module_op.get_asm(
         enable_debug_info=options.location_capture_config.level
@@ -1430,9 +1423,10 @@ def _generate_asm_code(mb, options):
 
 def _compile_asm_to_binary(asm_code, options):
     """Compile AMDGCN assembly to binary using clang++."""
-    import tempfile
     import os
     import subprocess
+    import tempfile
+
     from wave_lang.support.detect_waveasm import get_clang
 
     clang = get_clang()
