@@ -20,10 +20,11 @@ waveasm.program @vgpr_swap_iter_args
   %init_a = waveasm.v_mov_b32 %c0 : !waveasm.imm<0> -> !waveasm.vreg
   %init_b = waveasm.v_mov_b32 %c42 : !waveasm.imm<42> -> !waveasm.vreg
 
-  // Loop that swaps %a and %b each iteration.
-  // CHECK: v_mov_b32 v
-  // CHECK: v_mov_b32 v
-  // CHECK: v_mov_b32 v
+  // Loop that swaps %a and %b each iteration via v_swap_b32.
+  // CHECK: v_add_u32
+  // CHECK: s_add_u32
+  // CHECK: s_cmp_lt_u32
+  // CHECK: v_swap_b32
   // CHECK: s_cbranch_scc1
   %r:3 = waveasm.loop(%iv = %init_iv, %a = %init_a, %b = %init_b)
       : (!waveasm.sreg, !waveasm.vreg, !waveasm.vreg)

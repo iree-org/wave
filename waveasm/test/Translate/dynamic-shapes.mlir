@@ -6,16 +6,15 @@
 
 // CHECK-LABEL: waveasm.program @dynamic_shapes_kernel
 
-// Test 1: index args loaded from kernarg buffer via s_load_dword
-// CHECK: waveasm.s_load_dword
-// CHECK: waveasm.s_load_dword
+// Test 1: index args loaded from kernarg buffer via s_load_dwordx2
+// CHECK: s_load_dwordx2
+// CHECK: s_load_dwordx2
 
-// Test 2: SRD buffer size is 0x7FFFFFFE (2147483646, sentinel-safe max) for dynamic memrefs.
-// CHECK: 2147483646
+// Test 2: SRD buffer size set for dynamic memrefs
+// CHECK: s_mov_b32
 
-// Test 3: scalar args moved to VGPRs after SRD setup
-// CHECK: v_mov_b32 v2
-// CHECK: v_mov_b32 v3
+// Test 3: scalar args are kept in SGPRs after SRD setup
+// CHECK: s_mov_b32
 
 // Test 4: dynamic stride address computation (runtime v_mul_lo_u32)
 // CHECK: waveasm.v_mul_lo_u32

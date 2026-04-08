@@ -15,11 +15,16 @@
 namespace waveasm {
 
 /// Extract an integer constant from a Value.
-/// Handles ConstantOp directly, or V_MOV_B32(ConstantOp), or ImmType.
+/// Handles ConstantOp directly, V_MOV_B32(ConstantOp), S_MOV_B32(ConstantOp),
+/// or ImmType.
 inline std::optional<int64_t> getConstantValue(mlir::Value v) {
   if (auto constOp = v.getDefiningOp<ConstantOp>())
     return constOp.getValue();
   if (auto movOp = v.getDefiningOp<V_MOV_B32>()) {
+    if (auto constOp = movOp.getSrc().getDefiningOp<ConstantOp>())
+      return constOp.getValue();
+  }
+  if (auto movOp = v.getDefiningOp<S_MOV_B32>()) {
     if (auto constOp = movOp.getSrc().getDefiningOp<ConstantOp>())
       return constOp.getValue();
   }

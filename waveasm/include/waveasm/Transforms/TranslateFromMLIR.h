@@ -385,6 +385,26 @@ public:
     return pendingSRDs.size() + pendingScalarArgs.size();
   }
 
+  /// Get the number of args that fit in hardware preload SGPRs.
+  /// Uses all-or-nothing strategy: preloads ALL args when they fit,
+  /// otherwise preloads NOTHING. Partial preloading (SRDs only) is
+  /// avoided because mixing HW preloading with explicit s_load from
+  /// the same kernarg buffer produces incorrect values on GFX950.
+  static constexpr int64_t kMaxPreloadSGPRs = 16;
+  size_t getNumPreloadedArgs() const {
+    size_t total = pendingSRDs.size() + pendingScalarArgs.size();
+    if (total * 2 <= static_cast<size_t>(kMaxPreloadSGPRs))
+      return total;
+    return 0;
+  }
+
+  /// Whether scalar kernel args are hardware-preloaded (true when all args fit
+  /// in the preload limit) or must be loaded via explicit s_load instructions.
+  bool areScalarsPreloaded() const {
+    size_t total = pendingSRDs.size() + pendingScalarArgs.size();
+    return total * 2 <= static_cast<size_t>(kMaxPreloadSGPRs);
+  }
+
   //===--------------------------------------------------------------------===//
   // Split Vector Result Tracking
   //===--------------------------------------------------------------------===//
@@ -610,12 +630,11 @@ public:
 
   /// Get the number of user SGPRs (for computing system SGPR offsets)
   /// User SGPRs include: kernarg ptr (2) + preloaded args (on gfx950+)
+  /// Hardware limits user SGPRs to 16 on gfx950. Args that don't fit are
+  /// loaded via explicit s_load into overflow SGPR slots after the SRDs.
   int64_t getUserSgprCount() const {
-    // Base: 2 SGPRs for kernarg_segment_ptr
-    int64_t count = 2;
-    // On gfx950+ with kernarg preloading, add preloaded args
+    int64_t count = 2; // kernarg_segment_ptr
     if (llvm::isa<GFX950TargetAttr>(target)) {
-      // Each kernel arg uses 2 SGPRs, capped at 14 (hardware max 16 total).
       count += std::min(size_t(14), getNumKernelArgs() * 2);
     }
     return count;

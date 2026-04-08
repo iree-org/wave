@@ -12,7 +12,7 @@ module {
     //
     // CHECK-LABEL: waveasm.program @scalarized_kernel
     // CHECK: waveasm.constant 12
-    // CHECK: waveasm.v_add_u32
+    // CHECK: waveasm.s_add_u32
     // CHECK: waveasm.s_endpgm
     gpu.func @scalarized_kernel(%base: i32) kernel {
       %bcast = vector.broadcast %base : i32 to vector<4xi32>

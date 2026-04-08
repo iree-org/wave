@@ -33,11 +33,12 @@ static bool isInlineConstant(int64_t val) {
 }
 
 static const llvm::StringSet<> &getVOP2Instructions() {
+  // v_add_u32, v_sub_u32, v_subrev_u32 are VOP3-only on GFX9+ (the VOP2
+  // carry-producing variants are v_add_co_u32 / v_sub_co_u32 /
+  // v_subrev_co_u32). VOP3 does not support literal operands.
   static const llvm::StringSet<> kVOP2 = {
-      "v_add_u32",     "v_sub_u32", "v_subrev_u32",  "v_and_b32",
-      "v_or_b32",      "v_xor_b32", "v_lshlrev_b32", "v_lshrrev_b32",
-      "v_ashrrev_i32", "v_max_u32", "v_min_u32",     "v_add_i32",
-      "v_sub_i32",
+      "v_and_b32",     "v_or_b32",      "v_xor_b32", "v_lshlrev_b32",
+      "v_lshrrev_b32", "v_ashrrev_i32", "v_max_u32", "v_min_u32",
   };
   return kVOP2;
 }

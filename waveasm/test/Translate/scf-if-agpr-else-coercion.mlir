@@ -8,6 +8,9 @@
 // (producing registers) while the else branch yields zero-initialized
 // values (immediates).  The backend must coerce the else-yield immediates
 // into register types so that both branches yield type-compatible values.
+//
+// With SALU promotion, scalar cmpi produces SCC directly, so waveasm.if
+// gets an SCC condition and the output is in custom form.
 
 module {
   gpu.module @test_if_else_coercion {
@@ -22,15 +25,15 @@ module {
       %one_i32 = arith.constant 1 : i32
 
       // Then branch: compute a VGPR value (addi -> v_add_u32)
-      // Else branch: yield a constant zero (-> immediate)
-      // Backend must coerce the else-yield immediate to VGPR.
+      // Else branch: yield a constant zero (-> immediate coerced to vreg)
       //
-      // CHECK:      waveasm.if
+      // CHECK:      waveasm.s_cmp_lt_i32
+      // CHECK:      waveasm.if %{{.*}} : !waveasm.scc -> !waveasm.vreg {
       // CHECK:        waveasm.v_add_u32
-      // CHECK:        waveasm.yield {{.*}} : !waveasm.vreg
+      // CHECK:        waveasm.yield
       // CHECK:      } else {
-      // CHECK:        waveasm.v_mov_b32 {{.*}} -> !waveasm.vreg
-      // CHECK:        waveasm.yield {{.*}} : !waveasm.vreg
+      // CHECK:        waveasm.v_mov_b32
+      // CHECK:        waveasm.yield
       %result = scf.if %cond_i1 -> i32 {
         %val = arith.addi %zero_i32, %one_i32 : i32
         scf.yield %val : i32

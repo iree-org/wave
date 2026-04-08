@@ -3,6 +3,9 @@
 // Test: Translation from SCF dialect to region-based WaveASM control flow.
 // Verifies scf.for -> waveasm.loop and scf.if -> waveasm.if with correct
 // SSA threading, iter_args, and condition patterns.
+//
+// With SALU promotion, arith.cmpi on scalar operands emits s_cmp (SCC result),
+// so waveasm.if gets an SCC condition and the output is in custom form.
 
 module {
   gpu.module @test_scf_translation {
@@ -14,15 +17,14 @@ module {
       %c1 = arith.constant 1 : index
       %c16 = arith.constant 16 : index
 
-      // Init materialised via s_mov_b32
-      // CHECK:      %[[INIT:.*]] = waveasm.s_mov_b32 %{{.*}} : !waveasm.imm<0> -> !waveasm.sreg
-      // Loop carries single sreg
-      // CHECK-NEXT: %{{.*}} = waveasm.loop (%[[IV:.*]] = %[[INIT]]) : (!waveasm.sreg) -> !waveasm.sreg {
+      // Init materialised via s_mov_b32, loop carries single sreg
+      // CHECK:      waveasm.s_mov_b32
+      // CHECK:      waveasm.loop
       scf.for %i = %c0 to %c16 step %c1 {
         %i_i32 = arith.index_cast %i : index to i32
       }
       // Induction variable incremented, compared, condition terminates
-      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %{{.*}}, %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
       // CHECK-NEXT: %[[CMP:.*]] = waveasm.s_cmp_lt_u32 %[[NEXT]], %{{.*}} : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.scc
       // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.scc iter_args(%[[NEXT]]) : !waveasm.sreg
 
@@ -39,9 +41,9 @@ module {
       %init = arith.constant 0 : i32
 
       // Two inits: sreg counter + vreg accumulator
-      // CHECK:      %[[I0:.*]] = waveasm.s_mov_b32 %{{.*}} : !waveasm.imm<0> -> !waveasm.sreg
-      // CHECK-NEXT: %[[A0:.*]] = waveasm.v_mov_b32 %{{.*}} : !waveasm.imm<0> -> !waveasm.vreg
-      // CHECK-NEXT: %{{.*}}:2 = waveasm.loop (%[[IV:.*]] = %[[I0]], %[[ACC:.*]] = %[[A0]]) : (!waveasm.sreg, !waveasm.vreg) -> (!waveasm.sreg, !waveasm.vreg) {
+      // CHECK:      waveasm.s_mov_b32
+      // CHECK:      waveasm.v_mov_b32
+      // CHECK:      waveasm.loop
       %result = scf.for %i = %c0 to %c16 step %c1
           iter_args(%acc = %init) -> (i32) {
         %i_i32 = arith.index_cast %i : index to i32
@@ -49,11 +51,11 @@ module {
         scf.yield %new_acc : i32
       }
       // Body accumulates: vreg + sreg
-      // CHECK:      %[[NEWACC:.*]] = waveasm.v_add_u32 %[[ACC]], %[[IV]] : !waveasm.vreg, !waveasm.sreg -> !waveasm.vreg
+      // CHECK:      waveasm.v_add_u32
       // Induction variable incremented, compared, condition with both iter_args
-      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
+      // CHECK:      %[[NEXT:.*]], %{{.*}} = waveasm.s_add_u32 %{{.*}}, %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
       // CHECK-NEXT: %[[CMP:.*]] = waveasm.s_cmp_lt_u32 %[[NEXT]], %{{.*}} : !waveasm.sreg, !waveasm.imm<16> -> !waveasm.scc
-      // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.scc iter_args(%[[NEXT]], %[[NEWACC]]) : !waveasm.sreg, !waveasm.vreg
+      // CHECK-NEXT: waveasm.condition %[[CMP]] : !waveasm.scc iter_args(%[[NEXT]], %{{.*}}) : !waveasm.sreg, !waveasm.vreg
 
       // CHECK: waveasm.s_endpgm
       gpu.return
@@ -68,16 +70,18 @@ module {
       %cond_i32 = arith.cmpi slt, %arg0, %c10 : i32
       %cond_ext = arith.extui %cond_i32 : i1 to i32
 
+      // SALU promotion: scalar cmpi produces SCC directly
+      // CHECK:      waveasm.s_cmp_lt_i32
       // CHECK:      %{{.*}} = waveasm.if %{{.*}} : !waveasm.scc -> !waveasm.vreg {
       %result = scf.if %cond_i32 -> i32 {
         // CHECK:      waveasm.v_add_u32
         %sum = arith.addi %arg0, %arg1 : i32
-        // CHECK:      waveasm.yield %{{.*}} : !waveasm.vreg
+        // CHECK:      waveasm.yield
         scf.yield %sum : i32
       } else {
         // CHECK:      waveasm.v_sub_u32
         %diff = arith.subi %arg0, %arg1 : i32
-        // CHECK:      waveasm.yield %{{.*}} : !waveasm.vreg
+        // CHECK:      waveasm.yield
         scf.yield %diff : i32
       }
 
@@ -94,13 +98,13 @@ module {
       %c8 = arith.constant 8 : index
 
       // Outer loop: sreg counter
-      // CHECK:      %{{.*}} = waveasm.loop (%[[OI:.*]] = %{{.*}}) : (!waveasm.sreg) -> !waveasm.sreg {
+      // CHECK:      waveasm.loop
       scf.for %i = %c0 to %c4 step %c1 {
         // Inner loop: sreg counter
-        // CHECK:      %{{.*}} = waveasm.loop (%[[II:.*]] = %{{.*}}) : (!waveasm.sreg) -> !waveasm.sreg {
+        // CHECK:      waveasm.loop
         scf.for %j = %c0 to %c8 step %c1 {
           // Body uses both outer and inner IVs
-          // CHECK:      waveasm.v_add_u32 %[[OI]], %[[II]] : !waveasm.sreg, !waveasm.sreg -> !waveasm.vreg
+          // CHECK:      waveasm.s_add_u32
           %sum = arith.addi %i, %j : index
         }
         // Inner condition

@@ -15,8 +15,8 @@ module {
       // CHECK:      %[[INIT:.*]] = waveasm.s_mov_b32 %{{.*}} : !waveasm.imm<0> -> !waveasm.sreg
       // CHECK-NEXT: %{{.*}} = waveasm.loop (%[[IV:.*]] = %[[INIT]]) : (!waveasm.sreg) -> !waveasm.sreg {
       scf.for %i = %c0 to %c4 step %c1 {
-        // Body: arith.addi %i, %c1 -> v_add_u32 using block arg
-        // CHECK:      waveasm.v_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.vreg
+        // Body: arith.addi %i, %c1 -> s_add_u32 using block arg (both scalar)
+        // CHECK:      %{{.*}}, %{{.*}} = waveasm.s_add_u32 %[[IV]], %{{.*}} : !waveasm.sreg, !waveasm.imm<1> -> !waveasm.sreg, !waveasm.scc
         %sum = arith.addi %i, %c1 : index
       }
       // Increment, compare, condition

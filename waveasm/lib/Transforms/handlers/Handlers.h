@@ -26,6 +26,7 @@
 
 #include "waveasm/Transforms/TranslateFromMLIR.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
@@ -183,6 +184,8 @@ mlir::LogicalResult handleMemRefAtomicRMW(mlir::Operation *op,
 
 mlir::LogicalResult handleReadFirstLane(mlir::Operation *op,
                                         TranslationContext &ctx);
+mlir::LogicalResult handleROCDLSchedBarrier(mlir::Operation *op,
+                                            TranslationContext &ctx);
 mlir::LogicalResult handleSWaitcnt(mlir::Operation *op,
                                    TranslationContext &ctx);
 
@@ -276,6 +279,282 @@ template <typename To, typename From> inline To bitCast(From value) {
   To result;
   std::memcpy(&result, &value, sizeof(To));
   return result;
+}
+
+//===----------------------------------------------------------------------===//
+// Scalar / VGPR Helpers
+//===----------------------------------------------------------------------===//
+
+/// Check whether a value is scalar (SGPR) or an inline constant.
+inline bool isScalarOrImm(mlir::Value v) {
+  return isSGPRType(v.getType()) || isImmType(v.getType());
+}
+
+/// If \p v is an SGPR, emit a v_mov_b32 to coerce it into a VGPR so it can
+/// be used by VALU-only instructions (v_cvt_*, v_rcp_*, v_mul_f32, etc.).
+/// Returns \p v unchanged when it is already a VGPR or immediate.
+inline mlir::Value ensureVGPR(mlir::OpBuilder &builder, mlir::Location loc,
+                              TranslationContext &ctx, mlir::Value v) {
+  if (isSGPRType(v.getType())) {
+    auto vregType = ctx.createVRegType();
+    return V_MOV_B32::create(builder, loc, vregType, v);
+  }
+  return v;
+}
+
+//===----------------------------------------------------------------------===//
+// Auto-select SALU/VALU Emit Helpers
+//===----------------------------------------------------------------------===//
+
+/// Emit add: S_ADD_U32 when both operands are scalar, V_ADD_U32 otherwise.
+/// Commutative: swaps to put immediate in src1 (SALU src0 must be SGPR).
+inline mlir::Value emitAdd(mlir::Value a, mlir::Value b,
+                           mlir::OpBuilder &builder, mlir::Location loc,
+                           TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_ADD_U32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_ADD_U32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit sub: S_SUB_U32 when both operands are scalar, V_SUB_U32 otherwise.
+/// Not commutative: src0 (minuend) must be SGPR.
+inline mlir::Value emitSub(mlir::Value a, mlir::Value b,
+                           mlir::OpBuilder &builder, mlir::Location loc,
+                           TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) && isSGPRType(a.getType())) {
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_SUB_U32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_SUB_U32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit mul: S_MUL_I32 when both operands are scalar, V_MUL_LO_U32 otherwise.
+/// Commutative: swaps to put immediate in src1.
+inline mlir::Value emitMul(mlir::Value a, mlir::Value b,
+                           mlir::OpBuilder &builder, mlir::Location loc,
+                           TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    return S_MUL_I32::create(builder, loc, sregType, a, b);
+  }
+  auto vregType = ctx.createVRegType();
+  return V_MUL_LO_U32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit logical shift right: S_LSHR_B32 when scalar, V_LSHRREV_B32 otherwise.
+/// Not commutative: src0 (value) must be SGPR.
+inline mlir::Value emitLshr(mlir::Value value, mlir::Value shiftAmt,
+                            mlir::OpBuilder &builder, mlir::Location loc,
+                            TranslationContext &ctx) {
+  if (isScalarOrImm(value) && isScalarOrImm(shiftAmt) &&
+      isSGPRType(value.getType())) {
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_LSHR_B32::create(builder, loc, sregType, sccType, value, shiftAmt)
+        .getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  value = ensureVGPR(builder, loc, ctx, value);
+  return V_LSHRREV_B32::create(builder, loc, vregType, shiftAmt, value);
+}
+
+/// Emit logical shift left: S_LSHL_B32 when scalar, V_LSHLREV_B32 otherwise.
+/// Not commutative: src0 (value) must be SGPR.
+inline mlir::Value emitLshl(mlir::Value value, mlir::Value shiftAmt,
+                            mlir::OpBuilder &builder, mlir::Location loc,
+                            TranslationContext &ctx) {
+  if (isScalarOrImm(value) && isScalarOrImm(shiftAmt) &&
+      isSGPRType(value.getType())) {
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_LSHL_B32::create(builder, loc, sregType, sccType, value, shiftAmt)
+        .getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  value = ensureVGPR(builder, loc, ctx, value);
+  return V_LSHLREV_B32::create(builder, loc, vregType, shiftAmt, value);
+}
+
+/// Emit bitwise AND: S_AND_B32 when both scalar, V_AND_B32 otherwise.
+/// Commutative: swaps to put immediate in src1.
+inline mlir::Value emitAnd(mlir::Value a, mlir::Value b,
+                           mlir::OpBuilder &builder, mlir::Location loc,
+                           TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_AND_B32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_AND_B32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit bitwise OR: S_OR_B32 when both scalar, V_OR_B32 otherwise.
+/// Commutative: swaps to put immediate in src1.
+inline mlir::Value emitOr(mlir::Value a, mlir::Value b,
+                          mlir::OpBuilder &builder, mlir::Location loc,
+                          TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_OR_B32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_OR_B32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit bitwise XOR: S_XOR_B32 when both scalar, V_XOR_B32 otherwise.
+/// Commutative: swaps to put immediate in src1.
+inline mlir::Value emitXor(mlir::Value a, mlir::Value b,
+                           mlir::OpBuilder &builder, mlir::Location loc,
+                           TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_XOR_B32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_XOR_B32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit mulhi: S_MUL_HI_U32 when both scalar, V_MUL_HI_U32 otherwise.
+/// Commutative: swaps to put immediate in src1.
+inline mlir::Value emitMulHi(mlir::Value a, mlir::Value b,
+                             mlir::OpBuilder &builder, mlir::Location loc,
+                             TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    return S_MUL_HI_U32::create(builder, loc, sregType, a, b);
+  }
+  auto vregType = ctx.createVRegType();
+  return V_MUL_HI_U32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit signed max: S_MAX_I32 when both scalar, V_MAX_I32 otherwise.
+/// Not commutative for SCC semantics (SCC = src0 was selected) but
+/// the result value is commutative.
+inline mlir::Value emitMaxI32(mlir::Value a, mlir::Value b,
+                              mlir::OpBuilder &builder, mlir::Location loc,
+                              TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_MAX_I32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_MAX_I32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit signed min: S_MIN_I32 when both scalar, V_MIN_I32 otherwise.
+inline mlir::Value emitMinI32(mlir::Value a, mlir::Value b,
+                              mlir::OpBuilder &builder, mlir::Location loc,
+                              TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_MIN_I32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_MIN_I32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit unsigned max: S_MAX_U32 when both scalar, V_MAX_U32 otherwise.
+inline mlir::Value emitMaxU32(mlir::Value a, mlir::Value b,
+                              mlir::OpBuilder &builder, mlir::Location loc,
+                              TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_MAX_U32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_MAX_U32::create(builder, loc, vregType, a, b);
+}
+
+/// Emit unsigned min: S_MIN_U32 when both scalar, V_MIN_U32 otherwise.
+inline mlir::Value emitMinU32(mlir::Value a, mlir::Value b,
+                              mlir::OpBuilder &builder, mlir::Location loc,
+                              TranslationContext &ctx) {
+  if (isScalarOrImm(a) && isScalarOrImm(b) &&
+      !(isImmType(a.getType()) && isImmType(b.getType()))) {
+    if (isImmType(a.getType()))
+      std::swap(a, b);
+    auto sregType = ctx.createSRegType();
+    auto sccType = ctx.createSCCType();
+    return S_MIN_U32::create(builder, loc, sregType, sccType, a, b).getDst();
+  }
+  auto vregType = ctx.createVRegType();
+  return V_MIN_U32::create(builder, loc, vregType, a, b);
+}
+
+//===----------------------------------------------------------------------===//
+// Scalar Comparison Helper
+//===----------------------------------------------------------------------===//
+
+/// Emit S_CMP_* for the given predicate with SGPR operands (sets SCC).
+/// Both lhs and rhs must be SGPRs (not immediates) before calling.
+/// Returns the S_CMP result value (phantom SCC).
+inline mlir::Value emitScalarCmp(mlir::OpBuilder &builder, mlir::Location loc,
+                                 mlir::arith::CmpIPredicate pred,
+                                 mlir::Value lhs, mlir::Value rhs,
+                                 TranslationContext &ctx) {
+  auto sccType = ctx.createSCCType();
+  switch (pred) {
+  case mlir::arith::CmpIPredicate::eq:
+    return S_CMP_EQ_U32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::ne:
+    return S_CMP_NE_U32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::slt:
+    return S_CMP_LT_I32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::sle:
+    return S_CMP_LE_I32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::sgt:
+    return S_CMP_GT_I32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::sge:
+    return S_CMP_GE_I32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::ult:
+    return S_CMP_LT_U32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::ule:
+    return S_CMP_LE_U32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::ugt:
+    return S_CMP_GT_U32::create(builder, loc, sccType, lhs, rhs);
+  case mlir::arith::CmpIPredicate::uge:
+    return S_CMP_GE_U32::create(builder, loc, sccType, lhs, rhs);
+  }
+  llvm_unreachable("unhandled CmpIPredicate");
 }
 
 //===----------------------------------------------------------------------===//

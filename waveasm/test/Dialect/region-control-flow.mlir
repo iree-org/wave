@@ -124,11 +124,13 @@ waveasm.program @simple_if_then
 
   %a = waveasm.precolored.vreg 0 : !waveasm.vreg
   %b = waveasm.precolored.vreg 1 : !waveasm.vreg
-  %cond_val = waveasm.precolored.sreg 2 : !waveasm.sreg
+  %cond_sreg = waveasm.precolored.sreg 2 : !waveasm.sreg
+  %zero = waveasm.constant 0 : !waveasm.imm<0>
+  %cond_val = waveasm.s_cmp_ne_u32 %cond_sreg, %zero : !waveasm.sreg, !waveasm.imm<0> -> !waveasm.scc
 
-  // CHECK:      %[[COND:.*]] = waveasm.precolored.sreg 2 : !waveasm.sreg
-  // CHECK-NEXT: %{{.*}} = waveasm.if %[[COND]] : !waveasm.sreg -> !waveasm.vreg {
-  %result = waveasm.if %cond_val : !waveasm.sreg -> !waveasm.vreg {
+  // CHECK:      %[[COND:.*]] = waveasm.s_cmp_ne_u32 %{{.*}}, %{{.*}} : !waveasm.sreg, !waveasm.imm<0> -> !waveasm.scc
+  // CHECK-NEXT: %{{.*}} = waveasm.if %[[COND]] : !waveasm.scc -> !waveasm.vreg {
+  %result = waveasm.if %cond_val : !waveasm.scc -> !waveasm.vreg {
     // CHECK-NEXT:   %[[SUM:.*]] = waveasm.v_add_u32 %{{.*}}, %{{.*}} : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
     %sum = waveasm.v_add_u32 %a, %b : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
     // CHECK-NEXT:   waveasm.yield %[[SUM]] : !waveasm.vreg
@@ -187,10 +189,12 @@ waveasm.program @if_multiple_results
 
   %a = waveasm.precolored.vreg 0 : !waveasm.vreg
   %b = waveasm.precolored.vreg 1 : !waveasm.vreg
-  %cond = waveasm.precolored.sreg 2 : !waveasm.sreg
+  %cond_sreg = waveasm.precolored.sreg 2 : !waveasm.sreg
+  %zero_2 = waveasm.constant 0 : !waveasm.imm<0>
+  %cond = waveasm.s_cmp_ne_u32 %cond_sreg, %zero_2 : !waveasm.sreg, !waveasm.imm<0> -> !waveasm.scc
 
-  // CHECK:      %{{.*}}:2 = waveasm.if %{{.*}} : !waveasm.sreg -> !waveasm.vreg, !waveasm.vreg {
-  %r1, %r2 = waveasm.if %cond : !waveasm.sreg -> !waveasm.vreg, !waveasm.vreg {
+  // CHECK:      %{{.*}}:2 = waveasm.if %{{.*}} : !waveasm.scc -> !waveasm.vreg, !waveasm.vreg {
+  %r1, %r2 = waveasm.if %cond : !waveasm.scc -> !waveasm.vreg, !waveasm.vreg {
     // CHECK:      %{{.*}} = waveasm.v_add_u32 %{{.*}}, %{{.*}} : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
     %sum = waveasm.v_add_u32 %a, %b : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
     // CHECK-NEXT: %{{.*}} = waveasm.v_mul_lo_u32 %{{.*}}, %{{.*}} : !waveasm.vreg, !waveasm.vreg -> !waveasm.vreg
