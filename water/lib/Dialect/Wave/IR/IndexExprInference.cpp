@@ -218,7 +218,7 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
   IntegerAttr priAttr = IntegerAttr::get(i32, priority);
   SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> priEntries;
   priEntries.reserve(concreteValue.size());
-  for (auto [key, _] : concreteValue)
+  for (wave::WaveSymbolAttr key : llvm::make_first_range(concreteValue))
     priEntries.emplace_back(key, priAttr);
   priorities = WaveSymbolMappingAttr::get(ctx, priEntries);
 }
@@ -229,7 +229,7 @@ wave::IndexExprsLatticeStorage::IndexExprsLatticeStorage(
     : value(concreteValue, kSpecificTypeState), priorities(priorities),
       vectorShape(vectorShape), sourceVectorShape(vectorShape) {
   if (priorities) {
-    for (auto [_, priVal] : priorities)
+    for (Attribute priVal : llvm::make_second_range(priorities))
       sourceVectorShapePriority = std::max<int32_t>(
           sourceVectorShapePriority, llvm::cast<IntegerAttr>(priVal).getInt());
   }
@@ -966,7 +966,8 @@ void wave::IndexExprsLatticeStorage::print(llvm::raw_ostream &os) const {
   } else {
     os << "[pri: {";
     bool first = true;
-    for (auto [key, _] : getConcreteValue()) {
+    for (wave::WaveSymbolAttr key :
+         llvm::make_first_range(getConcreteValue())) {
       if (!first)
         os << ", ";
       first = false;
