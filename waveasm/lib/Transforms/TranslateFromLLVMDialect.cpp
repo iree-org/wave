@@ -238,31 +238,19 @@ static std::optional<Value> computeGEPOffset(LLVM::GEPOp op,
   if (allZero)
     return std::nullopt;
 
-  // Single dynamic index -- common case.
-  if (indices.size() == 1) {
-    auto idx = indices[0];
-    if (auto val = idx.dyn_cast<Value>()) {
-      FailureOr<Value> resolved = resolve(val, ctx);
-      if (failed(resolved))
-        return std::nullopt;
-      return *resolved;
-    }
-    int64_t constVal = cast<IntegerAttr>(idx).getInt();
-    auto immTy = ctx.createImmType(constVal);
-    return ConstantOp::create(builder, loc, immTy, constVal)->getResult(0);
-  }
-
-  // Multi-index: accumulate constant indices.
-  int64_t totalOffset = 0;
-  for (auto idx : indices) {
-    if (idx.dyn_cast<Value>())
-      return std::nullopt;
-    totalOffset += cast<IntegerAttr>(idx).getInt();
-  }
-  if (totalOffset == 0)
+  // Single index -- the only case we handle (element type gives byte stride).
+  if (indices.size() != 1)
     return std::nullopt;
-  auto immTy = ctx.createImmType(totalOffset);
-  return ConstantOp::create(builder, loc, immTy, totalOffset)->getResult(0);
+  auto idx = indices[0];
+  if (auto val = idx.dyn_cast<Value>()) {
+    FailureOr<Value> resolved = resolve(val, ctx);
+    if (failed(resolved))
+      return std::nullopt;
+    return *resolved;
+  }
+  int64_t constVal = cast<IntegerAttr>(idx).getInt();
+  auto immTy = ctx.createImmType(constVal);
+  return ConstantOp::create(builder, loc, immTy, constVal)->getResult(0);
 }
 
 //===----------------------------------------------------------------------===//
