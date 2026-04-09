@@ -1300,24 +1300,26 @@ LogicalResult handlePermlane16Swap(Operation *op, TranslationContext &ctx) {
     return op->emitError("permlane16_swap source not mapped");
   }
 
-  Value srcVal = *src;
-  if (isAGPRType(srcVal.getType())) {
-    auto vregTmp = ctx.createVRegType();
-    srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
-  }
+  Value srcVal = ensureVGPR(*src, ctx, builder, loc);
 
-  // Pass the original source directly to the swap. The hardware clobbers
-  // BOTH dst and src, but the emitter handles this by routing through
-  // scratch when the allocator assigns conflicting registers.
+  // Preserve the original source before the swap clobbers it.
+  // v_permlane16_swap_b32 overwrites BOTH dst and src, so downstream
+  // uses of the original value (element[1]) must read from a copy.
+  Value srcCopy = V_MOV_B32::create(builder, loc, ctx.createVRegType(), srcVal);
   auto dstType = ctx.createVRegType();
   Value swapped = V_PERMLANE16_SWAP_B32::create(builder, loc, dstType, srcVal);
 
+  // Remap the original MLIR source so any future lookups (e.g. arith.select
+  // that directly references own_lo/own_hi) resolve to the preserved copy
+  // instead of the clobbered register.
+  ctx.getMapper().mapValue(swapOp.getSrc(), srcCopy);
+
   // The MLIR result is !llvm.struct<(i32, i32)>.
   // Element [0] = swapped value (from partner lane).
-  // Element [1] = original value (srcVal — the emitter preserves it).
+  // Element [1] = original value (preserved in srcCopy).
   ctx.getMapper().mapValue(swapOp.getRes(), swapped);
   ctx.getMapper().setExtraMapping(swapOp.getRes(), 0, swapped);
-  ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, srcVal);
+  ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, srcCopy);
 
   return success();
 }

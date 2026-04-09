@@ -530,14 +530,13 @@ def build_graph_passes(
         partial(decompose_topk_ops, trace, launchable.constraints),
     ]
 
+    # Tags bf16 global writes that use source/target transposition
+    # (wide_stores layout) with _permlane_pack_global so the codegen emits
+    # v_permlane16_swap_b32 + buffer_store_dwordx4.  Runs unconditionally;
+    # writes without source/target are left untouched.
     from .wide_store_coalescing import coalesce_wide_stores
 
     graph_passes.append(partial(coalesce_wide_stores, trace))
-
-    if options.coalesce_epilogue_stores:
-        from .coalesce_epilogue_stores import coalesce_epilogue_stores
-
-        graph_passes.append(partial(coalesce_epilogue_stores, trace))
 
     graph_passes += [
         partial(simplify_indices, trace, launchable.constraints),

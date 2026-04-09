@@ -105,8 +105,6 @@ class WaveCompileOptions:
     specialize: bool = False
     eliminate_epilogue: bool = False
 
-    coalesce_epilogue_stores: bool = False
-
     # Cluster barrier signal/wait delay in number of loop iterations
     # None - no barriers inside the loop
     # 0 - signal and wait on same iteration
@@ -120,6 +118,10 @@ class WaveCompileOptions:
     # keep read linearization without annotating every buffer.
     allow_noncontiguous_runtime_buffers: bool = False
 
+    # Dynamic strides pass stride arguments at runtime and use
+    # memref.extract_strided_metadata for address computation.  The WaveASM
+    # backend does not lower extract_strided_metadata, so dynamic strides
+    # are restricted to the LLVM backend.
     @property
     def dynamic_strides(self) -> bool:
         return self.wave_runtime and self.backend == "llvm"

@@ -21,8 +21,11 @@
 #include "waveasm/Transforms/RegAlloc.h"
 
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
+
+#define DEBUG_TYPE "waveasm-assembly-emitter"
 
 #include <sstream>
 
@@ -973,9 +976,10 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           })
 
       // V_PERMLANE16_SWAP_B32: swap lanes 16 apart.
-      // The hardware clobbers BOTH dst and src. When the allocator assigns
-      // dst==src, we must save the original to a scratch register, swap
-      // through another scratch, then restore the original.
+      // The hardware clobbers BOTH dst and src. The handler inserts a
+      // v_mov_b32 copy before the swap, so the allocator should always
+      // assign dst != src. The fallback uses two scratch VGPRs above
+      // the allocator's range (kScratchVGPR and kScratchVGPR + 1).
       .Case<V_PERMLANE16_SWAP_B32>(
           [&](V_PERMLANE16_SWAP_B32 swapOp) -> std::optional<std::string> {
             std::string dst = resolveValue(swapOp.getDst());
@@ -984,15 +988,12 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               llvm::SmallVector<std::string> operands = {dst, src};
               return formatter.format("v_permlane16_swap_b32", operands);
             }
-            // dst==src: save original, swap through scratch, restore original
+            // dst==src fallback: use two scratch VGPRs both above allocator
+            // range
             std::string scratch0 = formatVGPRRange(kScratchVGPR, 1);
-            std::string scratch1 = formatVGPRRange(kScratchVGPR - 1, 1);
-            peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+            std::string scratch1 = formatVGPRRange(kScratchVGPR + 1, 1);
+            peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 2);
             invalidateScratchCache();
-            // 1. Save original src to scratch0
-            // 2. Copy src to scratch1 for the swap
-            // 3. Swap: dst gets partner's scratch1, scratch1 clobbered
-            // 4. Restore original from scratch0 back to src
             return "  v_mov_b32 " + scratch0 + ", " + src + "\n" +
                    "  v_mov_b32 " + scratch1 + ", " + src + "\n" +
                    "  v_permlane16_swap_b32 " + dst + ", " + scratch1 + "\n" +
@@ -1020,12 +1021,11 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             else if (isVirtualRegType(src.getType()))
               srcBase = mapping.getPhysReg(src);
             if (dstBase < 0 || srcBase < 0) {
-              llvm::errs() << "V_ACCVGPR_READ_B32 fallback: dstBase=" << dstBase
-                           << " srcBase=" << srcBase << " dstSize=" << dstSize
-                           << " srcSize=" << srcSize
-                           << " dstType=" << dst.getType()
-                           << " srcType=" << src.getType() << "\n";
-              return emitDefaultFormat(readOp, "v_accvgpr_read_b32");
+              readOp.emitError(
+                  "V_ACCVGPR_READ_B32: cannot resolve base registers for "
+                  "multi-register unroll (dstBase=")
+                  << dstBase << " srcBase=" << srcBase << ")";
+              return std::nullopt;
             }
             std::string lines;
             for (int64_t i = 0; i < size; ++i) {

@@ -40,7 +40,8 @@ using namespace mlir;
 namespace {
 
 /// Read element `index` from a DenseElementsAttr with integer elements,
-/// returning its value as int64_t.
+/// returning its value as int64_t.  Returns nullopt for float constants;
+/// callers that need float scalarization should add a float-element path.
 static std::optional<int64_t> getIntElement(DenseElementsAttr dense,
                                             int64_t index) {
   auto vecType = dyn_cast<VectorType>(dense.getType());
@@ -275,7 +276,9 @@ static Value tryScalarize(vector::ExtractOp extractOp, OpBuilder &rewriter) {
                                    scalarFalse);
   }
 
-  // Non-select path: extract[k]( index_cast?( addi(broadcast, dense) ) )
+  // Fast path for the common pattern extract[k]( index_cast?( addi(broadcast,
+  // dense) ) ). The general scalarizeAtIndex fallback handles this too, but
+  // this avoids recursion for the most frequent case.
   if (auto addOp = preIndexCast.getDefiningOp<arith::AddIOp>()) {
     Value broadcastSide = nullptr;
     DenseElementsAttr dense;
@@ -369,7 +372,9 @@ private:
     if (op->getNumResults() == 1 &&
         isa<VectorType>(op->getResult(0).getType()) &&
         isa<arith::AddIOp, arith::IndexCastOp, arith::SelectOp, arith::CmpIOp,
-            arith::AndIOp, arith::MulIOp, arith::SubIOp, arith::TruncFOp>(op))
+            arith::AndIOp, arith::MulIOp, arith::SubIOp, arith::TruncFOp,
+            arith::OrIOp, arith::XOrIOp, arith::ShRUIOp, arith::ShRSIOp,
+            arith::ShLIOp>(op))
       return true;
     // Dense vector constants.
     if (auto constOp = dyn_cast<arith::ConstantOp>(op)) {

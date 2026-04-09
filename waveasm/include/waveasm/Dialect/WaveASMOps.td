@@ -522,14 +522,18 @@ def WaveASM_V_READFIRSTLANE_B32 : WAVEASMOp<"v_readfirstlane_b32", [Pure]> {
 }
 
 // Lane swap operations (VGPR <-> VGPR across lanes)
+// [Pure] follows the dialect convention (same as V_READFIRSTLANE_B32 etc.)
+// even though the hardware clobbers the source register.  The handler
+// inserts a v_mov_b32 copy before the swap to preserve the original value,
+// so from the SSA perspective the op is side-effect-free.
 def WaveASM_V_PERMLANE16_SWAP_B32 : WAVEASMOp<"v_permlane16_swap_b32", [Pure]> {
   let summary = "Swap VGPR values between lanes 16 apart";
   let description = [{
     Exchanges a 32-bit value between paired lanes that are 16 positions apart.
     Lane i swaps with lane i^16 within each 32-lane half-wave.
     The hardware writes the swapped value to dst AND clobbers src.
-    The handler must ensure the original source value is preserved in a
-    separate register before invoking this instruction.
+    The handler inserts a v_mov_b32 copy before the swap to preserve the
+    original source value for downstream uses.
   }];
   let arguments = (ins WaveASM_AnyVGPR:$src);
   let results = (outs WaveASM_AnyVGPR:$dst);

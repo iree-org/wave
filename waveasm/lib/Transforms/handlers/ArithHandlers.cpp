@@ -452,16 +452,8 @@ LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx) {
   V_CMP_NE_U32::create(builder, loc, *cond, zeroConst);
 
   // v_cndmask_b32 requires VGPR sources — move from AGPR if needed.
-  Value trueV = *trueVal;
-  Value falseV = *falseVal;
-  if (isAGPRType(trueV.getType())) {
-    auto vregTmp = ctx.createVRegType();
-    trueV = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, trueV);
-  }
-  if (isAGPRType(falseV.getType())) {
-    auto vregTmp = ctx.createVRegType();
-    falseV = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, falseV);
-  }
+  Value trueV = ensureVGPR(*trueVal, ctx, builder, loc);
+  Value falseV = ensureVGPR(*falseVal, ctx, builder, loc);
 
   auto result =
       V_CNDMASK_B32::create(builder, loc, vregType, falseV, trueV, *cond);
@@ -553,6 +545,8 @@ LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx) {
 
   if (numElems > 1 && srcElemType.isF32() && dstElemType.isBF16()) {
     Value srcVal = *src;
+    // Not using ensureVGPR: multi-register AGPR→VGPR move needs explicit
+    // type construction to preserve size and alignment.
     if (isAGPRType(srcVal.getType())) {
       int64_t size = getRegSize(srcVal.getType());
       auto vregType = ctx.createVRegType(size, size > 1 ? size : 1);
@@ -571,16 +565,12 @@ LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx) {
                                builder.getI64IntegerAttr(i));
     };
 
+    assert(numElems % 2 == 0 &&
+           "v_cvt_pk_bf16_f32 requires an even number of f32 elements");
     SmallVector<Value> packedVals;
     for (int64_t i = 0; i < numElems; i += 2) {
       Value elemI = extractF32Elem(i);
-      Value elemJ;
-      if (i + 1 < numElems) {
-        elemJ = extractF32Elem(i + 1);
-      } else {
-        auto immZero = ctx.createImmType(0);
-        elemJ = ConstantOp::create(builder, loc, immZero, 0);
-      }
+      Value elemJ = extractF32Elem(i + 1);
       auto vregType = ctx.createVRegType();
       packedVals.push_back(
           V_CVT_PK_BF16_F32::create(builder, loc, vregType, elemI, elemJ));
@@ -597,12 +587,7 @@ LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx) {
   } else if (numElems > 1) {
     ctx.getMapper().mapValue(truncOp.getResult(), *src);
   } else {
-    Value srcVal = *src;
-    // VALU conversion instructions cannot read from AGPR.
-    if (isAGPRType(srcVal.getType())) {
-      auto vregTmp = ctx.createVRegType();
-      srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
-    }
+    Value srcVal = ensureVGPR(*src, ctx, builder, loc);
     auto vregType = ctx.createVRegType();
     Value result;
     if (srcElemType.isF32() && dstElemType.isBF16()) {
@@ -630,12 +615,7 @@ LogicalResult handleArithExtF(Operation *op, TranslationContext &ctx) {
   Type srcElemType = getElementTypeOrSelf(extOp.getIn().getType());
   Type dstElemType = getElementTypeOrSelf(extOp.getResult().getType());
 
-  Value srcVal = *src;
-  // VALU conversion instructions cannot read from AGPR.
-  if (isAGPRType(srcVal.getType())) {
-    auto vregTmp = ctx.createVRegType();
-    srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
-  }
+  Value srcVal = ensureVGPR(*src, ctx, builder, loc);
 
   auto vregType = ctx.createVRegType();
   Value result;

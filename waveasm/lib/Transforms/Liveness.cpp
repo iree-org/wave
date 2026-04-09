@@ -486,11 +486,12 @@ LivenessInfo computeLiveness(ProgramOp program) {
     }
   }
 
-  // Pass 2c: Extend V_PERMLANE16_SWAP_B32 source live ranges.
-  // The hardware clobbers BOTH dst and src registers. If the allocator
-  // assigns them the same physical register, the original value is lost.
-  // Extend the src's live range to match the dst's end point so the
-  // allocator cannot reuse src's register for dst.
+  // Pass 2c: Extend V_PERMLANE16_SWAP_B32 source live ranges
+  // (defense-in-depth). The handler already preserves the original source via
+  // v_mov_b32 (srcCopy) and remaps future MLIR lookups to the copy, so srcVal
+  // has no uses after the swap op.  This extension is largely redundant — the
+  // copy naturally keeps srcVal alive through the copy point — but is retained
+  // as a safety net in case the remap is ever bypassed.
   if (hasPermlaneSwaps) {
     for (auto *op : ops) {
       if (auto swapOp = dyn_cast<V_PERMLANE16_SWAP_B32>(op)) {

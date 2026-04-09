@@ -132,6 +132,8 @@ LogicalResult handleVectorFromElements(Operation *op, TranslationContext &ctx) {
   if (numElems == 1) {
     ctx.getMapper().mapValue(fromOp.getResult(), mappedElems[0]);
   } else {
+    // Alignment must match the widest store the packed register feeds:
+    // 4 for buffer_store_dwordx4 (16 bytes), 2 for dwordx2, 1 otherwise.
     int64_t alignment = (numElems >= 4) ? 4 : (numElems >= 2) ? 2 : 1;
     auto packedType = ctx.createVRegType(numElems, alignment);
     auto packed = PackOp::create(builder, loc, packedType, mappedElems);

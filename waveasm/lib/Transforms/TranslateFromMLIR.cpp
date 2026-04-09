@@ -1646,8 +1646,11 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     // BF16 store conversion: the arith.truncf handler defers vector f32->bf16
     // conversion, so data registers may still contain f32 values.
     // Skip conversion if data is already packed bf16 (e.g. from permlane
-    // coalescing path where the data went through explicit conversion and
-    // packing — the register count matches numElems/2, not numElems).
+    // coalescing path where the data went through v_cvt_pk_bf16_f32 +
+    // PackOp).  Packed bf16 uses numElems/2 registers (2 bf16 per dword);
+    // unpacked f32 uses numElems registers.
+    // TODO: Replace this register-count heuristic with an explicit flag
+    // propagated from the truncf/packing handler for robustness.
     if (elementType.isBF16() && data.has_value()) {
       int64_t numElems = vectorType.getNumElements();
       int64_t dataRegs = getRegSize(data->getType());

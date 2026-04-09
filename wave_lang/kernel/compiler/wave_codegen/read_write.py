@@ -1323,18 +1323,9 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
     use_llvm_store = flags != MemoryAccessFlags.NONE
 
-    is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
-    is_bf16 = isinstance(element_type, BF16Type)
-
-    if (
-        is_bf16
-        and not is_shared
-        and emitter.options.use_buffer_ops
-        and emitter.options.backend == "asm"
-    ):
-        mask = None
-
     if getattr(node, "_permlane_pack_global", False):
+        is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
+        is_bf16 = isinstance(element_type, BF16Type)
         if not is_shared and is_bf16:
             role = getattr(node, "_permlane_pack_role", "unpaired")
 

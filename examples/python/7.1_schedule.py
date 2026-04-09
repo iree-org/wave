@@ -489,7 +489,6 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_asm(
     options.use_wave_asm_backend = True
     options.wave_runtime = True
     options.eliminate_epilogue = eliminate_epilogue
-    options.coalesce_epilogue_stores = True
     schedule = get_mxfp4_asymmetric_schedule(
         eliminate_epilogue=eliminate_epilogue, is_bscale_shuffled=True
     )
