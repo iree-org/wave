@@ -8,7 +8,6 @@
 // CHECK-SAME: #wave.normal_form<full_op_types>
 // CHECK-SAME: #wave.normal_form<index_exprs>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 module @full_func_boundary_satisfied_module {
   func.func @full_func_boundary_satisfied(%arg0: !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32> {
     return %arg0 : !wave.tensor<[@M, @N] of f32>
@@ -22,7 +21,6 @@ module @full_func_boundary_satisfied_module {
 // CHECK: normalform.module
 // CHECK-SAME: #wave.normal_form<index_exprs>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 // CHECK-NOT: #wave.normal_form<full_func_boundary>
 // CHECK-NOT: #wave.normal_form<full_op_types>
 module @full_func_boundary_not_satisfied_module {
@@ -40,7 +38,6 @@ module @full_func_boundary_not_satisfied_module {
 // CHECK-SAME: #wave.normal_form<full_op_types>
 // CHECK-SAME: #wave.normal_form<index_exprs>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 module @index_exprs_satisfied_module {
   func.func @index_exprs_satisfied() {
     %c = arith.constant 0.0 : f32
@@ -62,7 +59,6 @@ module @index_exprs_satisfied_module {
 // CHECK-SAME: #wave.normal_form<full_op_types>
 // CHECK-NOT: #wave.normal_form<index_exprs>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 module @index_exprs_not_satisfied_module {
   func.func @index_exprs_not_satisfied() {
     %c = arith.constant 0.0 : f32
@@ -78,7 +74,6 @@ module @index_exprs_not_satisfied_module {
 // CHECK-SAME: #wave.normal_form<full_func_boundary>
 // CHECK-SAME: #wave.normal_form<full_op_types>
 // CHECK-SAME: #wave.normal_form<memory_only_types>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 module @memory_only_types_satisfied_module {
   func.func @memory_only_types_satisfied(%global: !wave.tensor<[@X] of f32, <global>>) {
     %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"BLOCK_Y">] -> (BLOCK_Y)>} : !wave.tensor<[@Y] of bf16, <shared>>
@@ -93,7 +88,6 @@ module @memory_only_types_satisfied_module {
 // CHECK-SAME: #wave.normal_form<full_func_boundary>
 // CHECK-SAME: #wave.normal_form<full_op_types>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 // CHECK-NOT: #wave.normal_form<memory_only_types>
 module @memory_only_types_not_satisfied_module {
   func.func @memory_only_types_not_satisfied() {
@@ -111,7 +105,6 @@ module @memory_only_types_not_satisfied_module {
 // CHECK-SAME: #wave.normal_form<full_op_types>
 // CHECK-SAME: #wave.normal_form<index_exprs>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 module @multiple_ops_with_index_module {
   func.func @multiple_ops_with_index() {
     %c = arith.constant 0.0 : f32
@@ -135,7 +128,6 @@ module @multiple_ops_with_index_module {
 // CHECK-SAME: #wave.normal_form<index_exprs>
 // CHECK-SAME: #wave.normal_form<memory_only_types>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 module @empty_module {
 }
 
@@ -150,7 +142,6 @@ module @empty_module {
 // CHECK-SAME: #wave.normal_form<index_exprs>
 // CHECK-SAME: #wave.normal_form<memory_only_types>
 // CHECK-SAME: #wave.normal_form<resolved_allocations>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 module @resolved_allocations_satisfied_module {
   func.func @resolved_allocations_satisfied() {
     %0 = wave.allocate {distributed_shape = #wave.expr_list<[#wave.symbol<"M">] -> (M)>}
@@ -181,7 +172,6 @@ module @parent_allocation_no_index_exprs_module {
 // CHECK-SAME: #wave.normal_form<full_func_boundary>
 // CHECK-SAME: #wave.normal_form<full_op_types>
 // CHECK-SAME: #wave.normal_form<memory_only_types>
-// CHECK-SAME: #wave.normal_form<ordered_syms>
 // CHECK-NOT: #wave.normal_form<resolved_allocations>
 module @resolved_allocations_not_satisfied_module {
   func.func @resolved_allocations_not_satisfied() {

@@ -186,7 +186,6 @@ class AttrNames(Enum):
     SIZE = ("size", "size")
     STRIDE = ("stride", "stride")
     MAPPING = ("mapping", "mapping")
-    ORDERED_SYMS = ("ordered_syms", "ordered_syms")
     TARGET_VECTOR_SHAPE = ("target_vector_shape", "target_vector_shape")
     VALUE = ("value", "value")
     VECTOR_SHAPES = ("vector_shape", "vector_shapes")
@@ -796,7 +795,7 @@ def _handle_read_op(op: ReadOp, parse_ctx: _OpParseContext) -> None:
     memory_node = parse_ctx.resolve_operand(op.memory)
     converted_attrs = _convert_supported_attrs(
         op,
-        ignore_attrs={AttrNames.ORDERED_SYMS.mlir_name, AttrNames.MAPPING.mlir_name},
+        ignore_attrs={AttrNames.MAPPING.mlir_name},
     )
 
     mapping = None
@@ -828,7 +827,7 @@ def _handle_write_op(op: WriteOp, parse_ctx: _OpParseContext) -> None:
     mem_node = parse_ctx.resolve_operand(op.memory)
     converted_attrs = _convert_supported_attrs(
         op,
-        ignore_attrs={AttrNames.ORDERED_SYMS.mlir_name, AttrNames.MAPPING.mlir_name},
+        ignore_attrs={AttrNames.MAPPING.mlir_name},
     )
 
     mapping = None

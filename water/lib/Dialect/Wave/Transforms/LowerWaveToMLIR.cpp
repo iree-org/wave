@@ -58,8 +58,7 @@ struct LowerWaveToMLIRPass
              wave::WaveNormalForm::OpTypesSpecified,
              wave::WaveNormalForm::MemoryOnlyTypes,
              wave::WaveNormalForm::ResolvedAllocations,
-             wave::WaveNormalForm::IndexExprsSpecified,
-             wave::WaveNormalForm::OrderedSymsSpecified},
+             wave::WaveNormalForm::IndexExprsSpecified},
             op, getPassName())))
       return signalPassFailure();
 

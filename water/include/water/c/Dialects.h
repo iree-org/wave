@@ -382,7 +382,6 @@ enum WaveNormalForm {
   WaveNormalFormIndexExprsSpecified = 2,
   WaveNormalFormMemoryOnlyTypes = 3,
   WaveNormalFormResolvedAllocations = 4,
-  WaveNormalFormOrderedSymsSpecified = 5,
 };
 
 /// Checks whether the given MLIR attribute is a WaveNormalFormAttr.

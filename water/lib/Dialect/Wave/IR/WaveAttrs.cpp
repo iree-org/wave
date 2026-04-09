@@ -1181,8 +1181,6 @@ LogicalResult WaveNormalFormAttr::verifyOperation(
                             "operations to have memref result type";
     return llvm::success();
   }
-  case wave::WaveNormalForm::OrderedSymsSpecified:
-    return llvm::success();
   }
   llvm_unreachable("unhandled normal form");
 }

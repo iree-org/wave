@@ -566,8 +566,6 @@ def ReadOp : WaveOp<"read", [
         "Number of elements processed by each thread">:$elements_per_thread,
     Arg<OptionalAttr<WaveSymbolMappingToNResultExprListAttr<1>>,
         "Bound expressions for symbolic dimensions that need masking">:$bounds,
-    Arg<OptionalAttr<WaveSymbolArrayAttr>,
-        "Ordered dimension symbols from memory type shape">:$ordered_syms,
     Arg<OptionalAttr<WaveExprListAttr>,
         "Indicates how value dimensions are remapped into memory dimensions">
        :$mapping
@@ -580,14 +578,6 @@ def ReadOp : WaveOp<"read", [
   let assemblyFormat = "$memory " # commonArgumentsSyntax # "attr-dict `:` "
                        "functional-type(operands, results)";
   let hasVerifier = 1;
-
-  let extraClassDeclaration = [{
-    /// Set ordered_syms from an ArrayRef of WaveSymbolAttr.
-    void setOrderedSyms(llvm::ArrayRef<::wave::WaveSymbolAttr> syms) {
-      llvm::SmallVector<::mlir::Attribute> attrs(syms.begin(), syms.end());
-      setOrderedSymsAttr(::mlir::ArrayAttr::get(getContext(), attrs));
-    }
-  }];
 }
 
 def RegisterOp : WaveOp<"register", [
@@ -640,8 +630,6 @@ def WriteOp : WaveOp<"write", [
         "Number of elements processed by each thread">:$elements_per_thread,
     Arg<OptionalAttr<WaveSymbolMappingToNResultExprListAttr<1>>,
         "Bound expressions for symbolic dimensions that need masking">:$bounds,
-    Arg<OptionalAttr<WaveSymbolArrayAttr>,
-        "Ordered dimension symbols from memory type shape">:$ordered_syms,
     Arg<OptionalAttr<WaveExprListAttr>,
         "Indicates how value dimensions are remapped into memory dimensions">
        :$mapping
@@ -652,14 +640,6 @@ def WriteOp : WaveOp<"write", [
     "qualified(type($value_to_store)) `,` qualified(type($memory))";
 
   let hasVerifier = 1;
-
-  let extraClassDeclaration = [{
-    /// Set ordered_syms from an ArrayRef of WaveSymbolAttr.
-    void setOrderedSyms(llvm::ArrayRef<::wave::WaveSymbolAttr> syms) {
-      llvm::SmallVector<::mlir::Attribute> attrs(syms.begin(), syms.end());
-      setOrderedSymsAttr(::mlir::ArrayAttr::get(getContext(), attrs));
-    }
-  }];
 }
 
 //-----------------------------------------------------------------------------

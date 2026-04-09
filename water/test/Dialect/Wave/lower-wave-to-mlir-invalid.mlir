@@ -1,6 +1,6 @@
 // RUN: water-opt %s -allow-unregistered-dialect -lower-wave-to-mlir --split-input-file --verify-diagnostics
 
-normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>] {
   func.func @binary_ops_pattern_failure() {
     %cst = arith.constant 1.0 : f32
     // expected-error @below {{wave dialect operation with no hyperparameters provided by any ancestor}}
@@ -23,7 +23,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>] {
   // expected-error @+1 {{failed to convert starting at this operation}}
   func.func @write_pattern_failure(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128>} {
@@ -47,7 +47,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // Should not crash on null stride.
 
-normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>] {
+normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>] {
   // expected-error @below {{failed to convert starting at this operation}}
   func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
     attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 128, @N = 128>} {

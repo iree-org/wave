@@ -116,7 +116,6 @@ def WaveNormalFormEnum
   I32EnumAttrCase<"IndexExprsSpecified",       2, "index_exprs">,
   I32EnumAttrCase<"MemoryOnlyTypes",           3, "memory_only_types">,
   I32EnumAttrCase<"ResolvedAllocations",       4, "resolved_allocations">,
-  I32EnumAttrCase<"OrderedSymsSpecified",      5, "ordered_syms">,
 ]> {
   let cppNamespace = "::wave";
   let genSpecializedAttr = 0;

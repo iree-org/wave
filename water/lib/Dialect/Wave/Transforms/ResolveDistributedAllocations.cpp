@@ -6,18 +6,12 @@
 
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveDialect.h"
-#include "water/Dialect/Wave/IR/WaveInterfaces.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
-#include "water/Dialect/Wave/IR/WaveUtils.h"
 #include "water/Dialect/Wave/Transforms/LoweringPatterns.h"
 #include "water/Dialect/Wave/Transforms/Passes.h"
 #include "water/Dialect/Wave/Transforms/Utils.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/IR/AffineExpr.h"
-#include "mlir/IR/AffineMap.h"
-
-#include "llvm/ADT/TypeSwitch.h"
 
 #define DEBUG_TYPE "wave-resolve-distributed-allocations"
 
@@ -34,43 +28,6 @@ namespace {
 struct ResolveDistributedAllocations
     : public wave::impl::WaterWaveResolveDistributedAllocationsPassBase<
           ResolveDistributedAllocations> {
-
-  /// Set the ordered_syms attribute on ReadOp and WriteOp based on their
-  /// memory operand's WaveTensorType shape.
-  void setOrderedSymsOnReadWriteOps(Operation *root) {
-    root->walk([&](Operation *op) {
-      llvm::TypeSwitch<Operation *>(op).Case<ReadOp, WriteOp>(
-          [](auto specificOp) {
-            if (specificOp.getOrderedSymsAttr())
-              return;
-
-            WaveTensorType valueTensorType;
-            if constexpr (std::is_same_v<decltype(specificOp), ReadOp>)
-              valueTensorType =
-                  dyn_cast<WaveTensorType>(specificOp.getResult().getType());
-            else
-              valueTensorType = dyn_cast<WaveTensorType>(
-                  specificOp.getValueToStore().getType());
-
-            auto memoryTensorType =
-                dyn_cast<WaveTensorType>(specificOp.getMemory().getType());
-            if (!valueTensorType && !memoryTensorType)
-              return;
-
-            if (valueTensorType) {
-              specificOp.setOrderedSyms(valueTensorType.getShape());
-            } else {
-              SmallVector<wave::WaveSymbolAttr> orderedSyms;
-              wave::permuteShape(memoryTensorType.getShape(),
-                                 specificOp.getMappingAttr()
-                                     ? specificOp.getMappingAttr().getMap()
-                                     : AffineMap(),
-                                 /*inverse=*/false, orderedSyms);
-              specificOp.setOrderedSyms(orderedSyms);
-            }
-          });
-    });
-  }
 
   /// Resolve all allocate operations within the given operation using the
   /// provided type converter. Returns failure if any allocation fails to
@@ -133,10 +90,6 @@ struct ResolveDistributedAllocations
           if (!hyperparam)
             return WalkResult::advance();
 
-          // Found hyperparameters, set ordered_syms on read/write ops before
-          // type conversion loses the dimension ordering information.
-          setOrderedSymsOnReadWriteOps(op);
-
           // Resolve all allocations in this subtree.
           WaveTypeConverter typeConverter(hyperparam);
           if (failed(resolveAllocations(op, typeConverter)))
@@ -150,9 +103,7 @@ struct ResolveDistributedAllocations
       return signalPassFailure();
 
     if (llvm::failed(wave::setNormalFormPassPostcondition(
-            {wave::WaveNormalForm::ResolvedAllocations,
-             wave::WaveNormalForm::OrderedSymsSpecified},
-            getOperation())))
+            {wave::WaveNormalForm::ResolvedAllocations}, getOperation())))
       return signalPassFailure();
   }
 };

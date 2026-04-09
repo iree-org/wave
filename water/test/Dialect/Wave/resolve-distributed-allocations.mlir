@@ -1,7 +1,7 @@
 // RUN: water-opt %s --water-wave-resolve-distributed-allocations --split-input-file | FileCheck %s
 
 // Test basic shared memory allocation resolution.
-// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
+// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_basic_alloc
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @resolve_basic_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64>} {
@@ -16,7 +16,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // -----
 
 // Test allocation with expression in distributed shape.
-// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
+// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_alloc_with_expr
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @resolve_alloc_with_expr() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 28, @M = 128, @K = 64>} {
@@ -31,7 +31,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // -----
 
 // Test that child allocation is also resolved.
-// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
+// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_child_alloc
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @resolve_child_alloc() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64, @SIZE = 8192>} {
@@ -53,7 +53,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // Test that padding increases last dimension of resolved memref.
 // BLOCK_K = 32, padding = 4, so last dim should be 32 + 4 = 36.
-// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
+// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_alloc_with_padding
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @resolve_alloc_with_padding() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64>} {
@@ -69,7 +69,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // Test that tail_padding does NOT affect the resolved memref shape.
 // BLOCK_K = 32, tail_padding = 128, shape should still be 64x32.
-// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
+// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_alloc_with_tail_padding
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @resolve_alloc_with_tail_padding() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64>} {
@@ -85,7 +85,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // Test both padding and tail_padding together.
 // BLOCK_K = 32, padding = 4 -> last dim = 36, tail_padding = 128 -> no shape change.
-// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
+// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>]
 // CHECK-LABEL: func.func @resolve_alloc_with_both_padding
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @resolve_alloc_with_both_padding() attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_K = 32, @M = 128, @K = 64>} {
@@ -100,7 +100,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // -----
 
 // Test that resolved_allocations is set even when there are no allocations.
-// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
+// CHECK: normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<resolved_allocations>]
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
   func.func @no_allocations() {
     return
@@ -110,7 +110,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 // -----
 
 // Test that resolved_allocations is set on a module without existing normal form.
-// CHECK: normalform.module [#wave.normal_form<resolved_allocations>, #wave.normal_form<ordered_syms>]
+// CHECK: normalform.module [#wave.normal_form<resolved_allocations>]
 normalform.module [] {
   func.func @resolve_without_existing_normal_form() attributes {wave.hyperparameters = #wave.hyperparameters<@M = 32>} {
     // CHECK: wave.allocate
@@ -123,15 +123,15 @@ normalform.module [] {
 
 // -----
 
-// Test that ordered_syms is set on wave.read ops.
-// The tensor has shape [@M, @K, @N] - ordered_syms should preserve this order,
-// NOT the alphabetical order (K, M, N) that DictionaryAttr would produce.
-// CHECK-LABEL: func.func @read_ordered_syms
+// wave.read index keys M, K, N (non-alphabetical) must stay in that order in the IR.
+// CHECK-LABEL: func.func @read_index_key_order_m_k_n
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @read_ordered_syms(%mem: !wave.tensor<[@M, @K, @N] of f16, <global>>)
+  func.func @read_index_key_order_m_k_n(%mem: !wave.tensor<[@M, @K, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@M = 64, @K = 32, @N = 128>} {
     // CHECK: wave.read
-    // CHECK-SAME: ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">, #wave.symbol<"N">]
+    // CHECK-SAME: M :
+    // CHECK-SAME: K :
+    // CHECK-SAME: N :
     %0 = wave.read %mem index [{
         M : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
         K : <[#wave.index_symbol<T0>] -> (T0 * 2, 1, 1)>,
@@ -143,13 +143,15 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
 // -----
 
-// Test that ordered_syms is set on wave.write ops.
-// CHECK-LABEL: func.func @write_ordered_syms
+// wave.write index keys M, K, N (non-alphabetical) must stay in that order in the IR.
+// CHECK-LABEL: func.func @write_index_key_order_m_k_n
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
-  func.func @write_ordered_syms(%val: vector<8xf16>, %mem: !wave.tensor<[@M, @K, @N] of f16, <global>>)
+  func.func @write_index_key_order_m_k_n(%val: vector<8xf16>, %mem: !wave.tensor<[@M, @K, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@M = 64, @K = 32, @N = 128>} {
     // CHECK: wave.write
-    // CHECK-SAME: ordered_syms = [#wave.symbol<"M">, #wave.symbol<"K">, #wave.symbol<"N">]
+    // CHECK-SAME: M :
+    // CHECK-SAME: K :
+    // CHECK-SAME: N :
     wave.write %val, %mem index [{
         M : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
         K : <[#wave.index_symbol<T0>] -> (T0 * 2, 1, 1)>,

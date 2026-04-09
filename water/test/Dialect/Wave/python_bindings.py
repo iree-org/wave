@@ -444,9 +444,6 @@ with ir.Context() as ctx:
     # CHECK: #wave.normal_form<resolved_allocations>
     print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.ResolvedAllocations))
 
-    # CHECK: #wave.normal_form<ordered_syms>
-    print(wave.WaveNormalFormAttr.get(wave.WaveNormalForm.OrderedSymsSpecified))
-
     try:
         wave.WaveNormalFormAttr.get(100)
     except TypeError as e:
