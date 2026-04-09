@@ -202,7 +202,8 @@ static Type inferResultType(ValueRange operands, TranslationContext &ctx) {
 
 /// Return the LLVM pointer address space, or 0 for non-pointer types.
 static unsigned getLLVMAddrSpace(Value v) {
-  if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(v.getType()))
+  if (LLVM::LLVMPointerType ptrTy =
+          dyn_cast<LLVM::LLVMPointerType>(v.getType()))
     return ptrTy.getAddressSpace();
   return 0;
 }
@@ -212,10 +213,10 @@ static unsigned getLLVMAddrSpace(Value v) {
 static int64_t getLLVMTypeBytes(Type ty) {
   if (ty.isIntOrFloat())
     return ty.getIntOrFloatBitWidth() / 8;
-  if (auto vecTy = dyn_cast<VectorType>(ty))
+  if (VectorType vecTy = dyn_cast<VectorType>(ty))
     return vecTy.getNumElements() *
            vecTy.getElementType().getIntOrFloatBitWidth() / 8;
-  if (auto arrTy = dyn_cast<LLVM::LLVMArrayType>(ty))
+  if (LLVM::LLVMArrayType arrTy = dyn_cast<LLVM::LLVMArrayType>(ty))
     return getLLVMTypeBytes(arrTy.getElementType()) * arrTy.getNumElements();
   return 0;
 }
@@ -230,7 +231,7 @@ static bool isZeroGEPIndex(llvm::PointerUnion<IntegerAttr, Value> idx) {
 /// Structural GEPs like [0, 0] are a no-op and can be forwarded even though we
 /// do not model nested aggregate layouts yet.
 static bool isAllZeroIndexGEP(LLVM::GEPOp op) {
-  for (auto idx : op.getIndices())
+  for (llvm::PointerUnion<IntegerAttr, Value> idx : op.getIndices())
     if (!isZeroGEPIndex(idx))
       return false;
   return true;
@@ -243,7 +244,7 @@ static FailureOr<Value> computeGEPByteOffset(LLVM::GEPOp op,
                                              TranslationContext &ctx) {
   OpBuilder &builder = ctx.getBuilder();
   Location loc = op.getLoc();
-  auto indices = op.getIndices();
+  LLVM::GEPIndicesAdaptor<ValueRange> indices = op.getIndices();
 
   // Only handle single-index GEPs. Multi-index GEPs walk nested types
   // and require full DataLayout support.
@@ -255,7 +256,7 @@ static FailureOr<Value> computeGEPByteOffset(LLVM::GEPOp op,
     return op->emitOpError(
         "unsupported GEP element type for byte offset computation");
 
-  auto idx = indices[0];
+  llvm::PointerUnion<IntegerAttr, Value> idx = indices[0];
   if (Value dynIdx = idx.dyn_cast<Value>()) {
     FailureOr<Value> resolved = resolve(dynIdx, ctx);
     if (failed(resolved))
@@ -317,22 +318,22 @@ static LogicalResult handlePoison(LLVM::PoisonOp op, LLVMTranslationState &st) {
 
 static LogicalResult handleConstant(LLVM::ConstantOp op,
                                     LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
+  TranslationContext &ctx = st.ctx;
+  OpBuilder &builder = ctx.getBuilder();
+  Location loc = op.getLoc();
 
-  auto valAttr = op.getValue();
+  Attribute valAttr = op.getValue();
 
   // Dense vector constant (e.g. MFMA accumulator init).
-  if (auto denseAttr = dyn_cast<DenseElementsAttr>(valAttr)) {
+  if (DenseElementsAttr denseAttr = dyn_cast<DenseElementsAttr>(valAttr)) {
     if (!denseAttr.isSplat())
       return op->emitOpError("non-splat dense constant not yet supported");
     int64_t numElems = denseAttr.getNumElements();
     APFloat splatVal = denseAttr.getSplatValue<APFloat>();
     int64_t rawBits = splatVal.bitcastToAPInt().getZExtValue();
-    auto immTy = ctx.createImmType(rawBits);
-    auto immOp = ConstantOp::create(builder, loc, immTy, rawBits);
-    auto vregTy = ctx.createVRegType(numElems, numElems);
+    ImmType immTy = ctx.createImmType(rawBits);
+    Value immOp = ConstantOp::create(builder, loc, immTy, rawBits);
+    VRegType vregTy = ctx.createVRegType(numElems, numElems);
     Value mov = V_MOV_B32::create(builder, loc, vregTy, immOp);
     ctx.getMapper().mapValue(op.getResult(), mov);
     return success();
@@ -344,7 +345,7 @@ static LogicalResult handleConstant(LLVM::ConstantOp op,
   else
     return op->emitOpError("unsupported constant type");
 
-  auto intType = dyn_cast<IntegerType>(op.getResult().getType());
+  IntegerType intType = dyn_cast<IntegerType>(op.getResult().getType());
   if (!intType)
     return op->emitOpError("expected integer constant");
 
@@ -424,7 +425,7 @@ static LogicalResult handleCastOp(LLVMOp op, LLVMTranslationState &st) {
   if (failed(src))
     return op->emitOpError("unmapped operand in cast");
   int64_t width = 1;
-  if (auto intTy = dyn_cast<IntegerType>(op.getResult().getType()))
+  if (IntegerType intTy = dyn_cast<IntegerType>(op.getResult().getType()))
     width = (intTy.getWidth() + 31) / 32;
   Type resTy = isVGPRType(src->getType())
                    ? (Type)ctx.createVRegType(width, width)
@@ -535,17 +536,18 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     Value word3 = ExtractOp::create(builder, loc, sregTy, *srdVal, 3);
 
     // Clear stride/swizzle bits in SRD word 1 (keep only base_addr[47:32]).
-    auto maskImm = ctx.createImmType(kSRDWord1BaseMask);
-    auto maskVal = ConstantOp::create(builder, loc, maskImm, kSRDWord1BaseMask);
+    ImmType maskImm = ctx.createImmType(kSRDWord1BaseMask);
+    Value maskVal =
+        ConstantOp::create(builder, loc, maskImm, kSRDWord1BaseMask);
     word1 = S_AND_B32::create(builder, loc, sregTy, ctx.createSCCType(), word1,
                               maskVal)
                 .getDst();
 
     // Patch SRD[3] with the actual flags from make.buffer.rsrc.
-    auto flags = getConstantIntValue(op.getFlags());
+    std::optional<int64_t> flags = getConstantIntValue(op.getFlags());
     if (flags && *flags != kSRDDefaultFlags) {
-      auto flagsImm = ctx.createImmType(*flags);
-      auto flagsVal = ConstantOp::create(builder, loc, flagsImm, *flags);
+      ImmType flagsImm = ctx.createImmType(*flags);
+      Value flagsVal = ConstantOp::create(builder, loc, flagsImm, *flags);
       word3 = S_MOV_B32::create(builder, loc, sregTy, flagsVal);
     }
 
@@ -569,7 +571,8 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
 
       // Adjust base: S_ADD_U32 sets SCC, S_ADDC_U32 reads it.
       SCCType sccTy = ctx.createSCCType();
-      auto addLo = S_ADD_U32::create(builder, loc, sregTy, sccTy, word0, offLo);
+      S_ADD_U32 addLo =
+          S_ADD_U32::create(builder, loc, sregTy, sccTy, word0, offLo);
       word0 = addLo.getDst();
       word1 = S_ADDC_U32::create(builder, loc, sregTy, sccTy, addLo.getScc(),
                                  word1, offHi)
@@ -577,7 +580,7 @@ static LogicalResult handleMakeBufferRsrc(ROCDL::MakeBufferRsrcOp op,
     }
 
     // Pack into a 4-wide SGPR SRD.
-    auto srdType = ctx.createSRegType(4, 4);
+    SRegType srdType = ctx.createSRegType(4, 4);
     Value newSrd = PackOp::create(builder, loc, srdType,
                                   ValueRange{word0, word1, word2, word3});
     st.mapBufferRsrc(op.getResult(), newSrd);
@@ -804,22 +807,22 @@ static LogicalResult handleStore(LLVM::StoreOp op, LLVMTranslationState &st) {
 
 static LogicalResult handleAddressOf(LLVM::AddressOfOp op,
                                      LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
+  TranslationContext &ctx = st.ctx;
   // Look up the global to determine LDS size.
-  auto global = SymbolTable::lookupNearestSymbolFrom<LLVM::GlobalOp>(
+  LLVM::GlobalOp global = SymbolTable::lookupNearestSymbolFrom<LLVM::GlobalOp>(
       op, op.getGlobalNameAttr());
   if (global) {
-    auto globalTy = global.getType();
+    Type globalTy = global.getType();
     int64_t sizeBytes = getLLVMTypeBytes(globalTy);
     if (sizeBytes > 0)
       ctx.addLDSSize(sizeBytes);
   }
 
   // Map to a constant 0 offset in a VGPR -- LDS addressing is relative.
-  auto &builder = ctx.getBuilder();
-  auto immTy = ctx.createImmType(0);
-  auto zero = ConstantOp::create(builder, op.getLoc(), immTy, int64_t{0});
-  auto vregTy = ctx.createVRegType();
+  OpBuilder &builder = ctx.getBuilder();
+  ImmType immTy = ctx.createImmType(0);
+  Value zero = ConstantOp::create(builder, op.getLoc(), immTy, int64_t{0});
+  VRegType vregTy = ctx.createVRegType();
   Value mov = V_MOV_B32::create(builder, op.getLoc(), vregTy, zero);
   ctx.getMapper().mapValue(op.getResult(), mov);
   return success();
@@ -831,16 +834,16 @@ static LogicalResult handleAddressOf(LLVM::AddressOfOp op,
 
 static LogicalResult handleLDSLoad(LLVM::LoadOp op, Value addr,
                                    LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
+  TranslationContext &ctx = st.ctx;
+  OpBuilder &builder = ctx.getBuilder();
+  Location loc = op.getLoc();
 
   int64_t numBytes = getBufferAccessBytes(op.getResult().getType());
   FailureOr<Value> offset = resolve(addr, ctx);
   if (failed(offset))
     return op->emitOpError("unmapped LDS address");
   // DS instructions use a 32-bit vaddr. Truncate wide offsets.
-  auto vregTy = ctx.createVRegType();
+  VRegType vregTy = ctx.createVRegType();
   if (getRegSize(offset->getType()) > 1)
     *offset = ArithTruncOp::create(builder, loc, vregTy, *offset);
 
@@ -850,10 +853,10 @@ static LogicalResult handleLDSLoad(LLVM::LoadOp op, Value addr,
   else if (numBytes == 4)
     loadOp = DS_READ_B32::create(builder, loc, TypeRange{vregTy}, *offset);
   else if (numBytes == 8) {
-    auto wideTy = ctx.createVRegType(2, 2);
+    VRegType wideTy = ctx.createVRegType(2, 2);
     loadOp = DS_READ_B64::create(builder, loc, TypeRange{wideTy}, *offset);
   } else if (numBytes == 16) {
-    auto wideTy = ctx.createVRegType(4, 4);
+    VRegType wideTy = ctx.createVRegType(4, 4);
     loadOp = DS_READ_B128::create(builder, loc, TypeRange{wideTy}, *offset);
   } else
     return op->emitOpError("unsupported LDS load size: ")
@@ -865,16 +868,16 @@ static LogicalResult handleLDSLoad(LLVM::LoadOp op, Value addr,
 
 static LogicalResult handleLDSStore(LLVM::StoreOp op, Value addr,
                                     LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
+  TranslationContext &ctx = st.ctx;
+  OpBuilder &builder = ctx.getBuilder();
+  Location loc = op.getLoc();
 
   FailureOr<Value> data = resolve(op.getValue(), ctx);
   FailureOr<Value> offset = resolve(addr, ctx);
   if (failed(data) || failed(offset))
     return op->emitOpError("unmapped LDS operand");
   // DS instructions use a 32-bit vaddr. Truncate wide offsets.
-  auto vregTy = ctx.createVRegType();
+  VRegType vregTy = ctx.createVRegType();
   if (getRegSize(offset->getType()) > 1)
     *offset = ArithTruncOp::create(builder, loc, vregTy, *offset);
   int64_t numBytes = getBufferAccessBytes(op.getValue().getType());
@@ -899,9 +902,9 @@ static LogicalResult handleLDSStore(LLVM::StoreOp op, Value addr,
 //===----------------------------------------------------------------------===//
 
 static LogicalResult handleSDiv(LLVM::SDivOp op, LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
+  TranslationContext &ctx = st.ctx;
+  OpBuilder &builder = ctx.getBuilder();
+  Location loc = op.getLoc();
   FailureOr<Value> lhs = resolve(op.getLhs(), ctx);
   if (failed(lhs))
     return op->emitOpError("unmapped operand in sdiv");
@@ -912,19 +915,19 @@ static LogicalResult handleSDiv(LLVM::SDivOp op, LLVMTranslationState &st) {
   // Signed division by a positive power-of-2 constant:
   //   q = (x + (x < 0 ? divisor - 1 : 0)) >> log2(divisor)
   // This preserves LLVM's trunc-toward-zero semantics for negative dividends.
-  if (auto constVal = getConstantIntValue(op.getRhs())) {
+  if (std::optional<int64_t> constVal = getConstantIntValue(op.getRhs())) {
     int64_t divisor = *constVal;
     if (divisor > 0 && (divisor & (divisor - 1)) == 0) {
       int64_t shiftAmt = llvm::Log2_64(divisor);
-      auto zero = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
-      auto biasImm = ConstantOp::create(
+      Value zero = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
+      Value biasImm = ConstantOp::create(
           builder, loc, ctx.createImmType(divisor - 1), divisor - 1);
-      auto shiftConst = ConstantOp::create(
+      Value shiftConst = ConstantOp::create(
           builder, loc, ctx.createImmType(shiftAmt), shiftAmt);
       Value result;
       if (isSGPRType(lhs->getType())) {
-        auto sregTy = ctx.createSRegType();
-        auto sccTy = ctx.createSCCType();
+        SRegType sregTy = ctx.createSRegType();
+        SCCType sccTy = ctx.createSCCType();
         Value isNegative =
             S_CMP_LT_I32::create(builder, loc, sccTy, *lhs, zero);
         Value bias = S_CSELECT_B32::create(builder, loc, sregTy, isNegative,
@@ -934,7 +937,7 @@ static LogicalResult handleSDiv(LLVM::SDivOp op, LLVMTranslationState &st) {
             S_ASHR_I32::create(builder, loc, sregTy, sccTy, biased, shiftConst)
                 .getDst();
       } else {
-        auto vregTy = ctx.createVRegType();
+        VRegType vregTy = ctx.createVRegType();
         Value isNegative = ArithCmpOp::create(builder, loc, vregTy,
                                               CmpPredicate::slt, *lhs, zero);
         Value bias = ArithSelectOp::create(builder, loc, vregTy, zero, biasImm,
@@ -952,9 +955,9 @@ static LogicalResult handleSDiv(LLVM::SDivOp op, LLVMTranslationState &st) {
 }
 
 static LogicalResult handleSRem(LLVM::SRemOp op, LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
+  TranslationContext &ctx = st.ctx;
+  OpBuilder &builder = ctx.getBuilder();
+  Location loc = op.getLoc();
   FailureOr<Value> lhs = resolve(op.getLhs(), ctx);
   if (failed(lhs))
     return op->emitOpError("unmapped operand in srem");
@@ -966,18 +969,18 @@ static LogicalResult handleSRem(LLVM::SRemOp op, LLVMTranslationState &st) {
   //   r = x & (divisor - 1)
   //   if (x < 0 && r != 0) r -= divisor
   // This keeps the remainder's sign consistent with LLVM srem.
-  if (auto constVal = getConstantIntValue(op.getRhs())) {
+  if (std::optional<int64_t> constVal = getConstantIntValue(op.getRhs())) {
     int64_t divisor = *constVal;
     if (divisor > 0 && (divisor & (divisor - 1)) == 0) {
-      auto zero = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
-      auto maskConst = ConstantOp::create(
+      Value zero = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
+      Value maskConst = ConstantOp::create(
           builder, loc, ctx.createImmType(divisor - 1), divisor - 1);
-      auto negDivisor = ConstantOp::create(
+      Value negDivisor = ConstantOp::create(
           builder, loc, ctx.createImmType(-divisor), -divisor);
       Value result;
       if (isSGPRType(lhs->getType())) {
-        auto sregTy = ctx.createSRegType();
-        auto sccTy = ctx.createSCCType();
+        SRegType sregTy = ctx.createSRegType();
+        SCCType sccTy = ctx.createSCCType();
         Value rawRem =
             ArithAndOp::create(builder, loc, sregTy, *lhs, maskConst);
         Value isNegative =
@@ -991,7 +994,7 @@ static LogicalResult handleSRem(LLVM::SRemOp op, LLVMTranslationState &st) {
         result = S_CSELECT_B32::create(builder, loc, sregTy, isNegative,
                                        maybeAdjusted, rawRem);
       } else {
-        auto vregTy = ctx.createVRegType();
+        VRegType vregTy = ctx.createVRegType();
         Value rawRem =
             ArithAndOp::create(builder, loc, vregTy, *lhs, maskConst);
         Value isNegative = ArithCmpOp::create(builder, loc, vregTy,
@@ -1034,17 +1037,17 @@ static LogicalResult handleBarrier(OpTy op, LLVMTranslationState &st) {
 
 static LogicalResult handleShuffleVector(LLVM::ShuffleVectorOp op,
                                          LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
+  TranslationContext &ctx = st.ctx;
+  OpBuilder &builder = ctx.getBuilder();
   FailureOr<Value> src = resolve(op.getV1(), ctx);
   if (failed(src))
     return op->emitOpError("unmapped operand in shufflevector");
 
   // shufflevector with a single index extracts one element.
-  auto mask = op.getMask();
+  llvm::ArrayRef<int32_t> mask = op.getMask();
   if (mask.size() == 1) {
     int64_t idx = mask[0];
-    auto vregTy = ctx.createVRegType();
+    VRegType vregTy = ctx.createVRegType();
     Value extract = ExtractOp::create(builder, op.getLoc(), vregTy, *src, idx);
     ctx.getMapper().mapValue(op.getResult(), extract);
     return success();
@@ -1059,9 +1062,9 @@ static LogicalResult handleShuffleVector(LLVM::ShuffleVectorOp op,
 
 static LogicalResult handleMFMA_F32_16x16x16_F16(ROCDL::mfma_f32_16x16x16f16 op,
                                                  LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
+  TranslationContext &ctx = st.ctx;
+  OpBuilder &builder = ctx.getBuilder();
+  Location loc = op.getLoc();
 
   FailureOr<Value> a = resolve(op.getA(), ctx);
   FailureOr<Value> b = resolve(op.getB(), ctx);
@@ -1070,7 +1073,7 @@ static LogicalResult handleMFMA_F32_16x16x16_F16(ROCDL::mfma_f32_16x16x16f16 op,
     return op->emitOpError("unmapped operand in MFMA");
 
   // Result and accumulator are vector<4xf32> -> 4 VGPRs.
-  auto accTy = ctx.createVRegType(4, 4);
+  VRegType accTy = ctx.createVRegType(4, 4);
   Value mfma = V_MFMA_F32_16X16X16_F16::create(builder, loc, accTy, *a, *b, *c);
   ctx.getMapper().mapValue(op.getResult(), mfma);
   return success();
@@ -1083,10 +1086,29 @@ static LogicalResult handleMFMA_F32_16x16x16_F16(ROCDL::mfma_f32_16x16x16f16 op,
 /// Forward declaration for recursive op translation.
 static LogicalResult translateOp(Operation *op, LLVMTranslationState &st);
 
+static FailureOr<Value> materializeI32SReg(Value v, StringRef name,
+                                           scf::ForOp op,
+                                           TranslationContext &ctx,
+                                           OpBuilder &builder, Location loc) {
+  if (getRegSize(v.getType()) != 1) {
+    op->emitOpError(name) << " must lower to i32";
+    return failure();
+  }
+  SRegType sregTy = ctx.createSRegType();
+  if (isSGPRType(v.getType()))
+    return v;
+  if (isImmType(v.getType()))
+    return S_MOV_B32::create(builder, loc, sregTy, v).getResult();
+  if (isVGPRType(v.getType()))
+    return V_READFIRSTLANE_B32::create(builder, loc, sregTy, v).getResult();
+  op->emitOpError(name) << " must lower to an SGPR or VGPR i32";
+  return failure();
+}
+
 static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
+  TranslationContext &ctx = st.ctx;
+  OpBuilder &builder = ctx.getBuilder();
+  Location loc = op.getLoc();
 
   FailureOr<Value> lb = resolve(op.getLowerBound(), ctx);
   FailureOr<Value> ub = resolve(op.getUpperBound(), ctx);
@@ -1096,25 +1118,12 @@ static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
 
   // TODO: Preserve full scf.for zero-trip semantics. waveasm.loop is do-while
   // and this lowering currently assumes the trip count is known positive.
-  auto toI32SReg = [&](Value v, StringRef name) -> FailureOr<Value> {
-    if (getRegSize(v.getType()) != 1) {
-      op->emitOpError(name) << " must lower to i32";
-      return failure();
-    }
-    auto sregTy = ctx.createSRegType();
-    if (isSGPRType(v.getType()))
-      return v;
-    if (isImmType(v.getType()))
-      return S_MOV_B32::create(builder, loc, sregTy, v).getResult();
-    if (isVGPRType(v.getType()))
-      return V_READFIRSTLANE_B32::create(builder, loc, sregTy, v).getResult();
-    op->emitOpError(name) << " must lower to an SGPR or VGPR i32";
-    return failure();
-  };
-
-  FailureOr<Value> lbScalar = toI32SReg(*lb, "scf.for lower bound");
-  FailureOr<Value> ubScalar = toI32SReg(*ub, "scf.for upper bound");
-  FailureOr<Value> stepScalar = toI32SReg(*step, "scf.for step");
+  FailureOr<Value> lbScalar =
+      materializeI32SReg(*lb, "scf.for lower bound", op, ctx, builder, loc);
+  FailureOr<Value> ubScalar =
+      materializeI32SReg(*ub, "scf.for upper bound", op, ctx, builder, loc);
+  FailureOr<Value> stepScalar =
+      materializeI32SReg(*step, "scf.for step", op, ctx, builder, loc);
   if (failed(lbScalar) || failed(ubScalar) || failed(stepScalar))
     return failure();
 
@@ -1129,7 +1138,7 @@ static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
   }
 
   // Create the waveasm.loop (do-while semantics).
-  auto loopOp = LoopOp::create(builder, loc, initArgs);
+  LoopOp loopOp = LoopOp::create(builder, loc, initArgs);
   Block &bodyBlock = loopOp.getBodyBlock();
 
   // Map the induction variable (block arg 0).
@@ -1149,15 +1158,15 @@ static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
 
   // Build loop increment and condition.
   Value inductionVar = bodyBlock.getArgument(0);
-  auto sregTy = ctx.createSRegType();
-  auto sccTy = ctx.createSCCType();
+  SRegType sregTy = ctx.createSRegType();
+  SCCType sccTy = ctx.createSCCType();
   Value nextIV =
       S_ADD_U32::create(builder, loc, sregTy, sccTy, inductionVar, *stepScalar)
           .getDst();
   Value cond = S_CMP_LT_U32::create(builder, loc, sccTy, nextIV, *ubScalar);
 
   // Collect iter args from yield.
-  auto yieldOp = cast<scf::YieldOp>(op.getBody()->getTerminator());
+  scf::YieldOp yieldOp = cast<scf::YieldOp>(op.getBody()->getTerminator());
   SmallVector<Value> condIterArgs;
   condIterArgs.push_back(nextIV);
   for (Value v : yieldOp.getOperands()) {
