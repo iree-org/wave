@@ -44,7 +44,7 @@ class WaveOp<string mnemonic, list<Trait> traits = []>
   );
 
   string commonArgumentsSyntax =
-      "( `index` custom<WaveIndexDict>($index)^ )?"
+      "( `index` $index^ )?"
       "( `vector_shape` custom<WaveVectorShapeDictList>($vector_shape)^ )?";
 }
 

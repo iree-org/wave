@@ -8,6 +8,7 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/OpImplementation.h"
 #include "water/Dialect/Wave/IR/WaveAttrs.h"
 #include "water/Dialect/Wave/IR/WaveOps.h"
 #include "water/Dialect/Wave/IR/WaveTypes.h"
@@ -27,6 +28,21 @@
 
 using namespace mlir;
 
+namespace {
+// Interface to support module-level aliases for WaveIndexMappingAttr.
+struct WaveOpAsmDialectInterface : public OpAsmDialectInterface {
+  using OpAsmDialectInterface::OpAsmDialectInterface;
+
+  AliasResult getAlias(Attribute attr, raw_ostream &os) const override {
+    if (isa<wave::WaveIndexMappingAttr>(attr)) {
+      os << "wim";
+      return AliasResult::OverridableAlias;
+    }
+    return AliasResult::NoAlias;
+  }
+};
+} // namespace
+
 void wave::WaveDialect::initialize() {
   registerAttributes();
   addOperations<
@@ -34,6 +50,7 @@ void wave::WaveDialect::initialize() {
 #include "water/Dialect/Wave/IR/WaveOps.cpp.inc"
       >();
   registerTypes();
+  addInterfaces<WaveOpAsmDialectInterface>();
 }
 
 // Attach a note to the diagnostic listing the symbol names available in the

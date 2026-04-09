@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-wave-infer-index-exprs --allow-unregistered-dialect --split-input-file --verify-diagnostics | FileCheck %s
+// RUN: water-opt %s --water-wave-infer-index-exprs --allow-unregistered-dialect --split-input-file --verify-diagnostics --mlir-print-local-scope | FileCheck %s
 
 // expected-error @below {{expects the root operation or its ancestor to guarantee the full_func_boundary normal form}}
 normalform.module [] {
@@ -63,20 +63,17 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   ]} {
     // CHECK: wave.mma
     // Left-hand side
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     // Right-hand side
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Accumulator
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Result (matches the accumulator)
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // CHECK: }
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
@@ -127,24 +124,21 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   ]} {
     // CHECK: wave.mma
     // LHS
-    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     // RHS
-    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Accumulator
-    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Result
-    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // CHECK: }
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
@@ -169,24 +163,21 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   ], wave.hyperparameters = #wave.hyperparameters<@BLOCK_B = 2 : i64, @B = 10, @M = 16, @N = 16, @K = 16>} {
     // CHECK: wave.mma
     // LHS
-    // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @B = #wave.index_mapping<[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     // RHS
-    // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @B = #wave.index_mapping<[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Accumulator
-    // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG:  @B = #wave.index_mapping<[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Result
-    // CHECK-DAG:  B : <[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @B = #wave.index_mapping<[#wave.iter<"B">, #wave.symbol<"BLOCK_B">] -> (_Iter_B * BLOCK_B, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // CHECK: }
     wave.iterate @B {
     ^bb0:
@@ -210,35 +201,32 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.read
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     %a_read = wave.read %a : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16, <register>>
     // CHECK: wave.read
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     %b_read = wave.read %b : (!wave.tensor<[@N, @K] of f16>) -> !wave.tensor<[@N, @K] of f16, <register>>
     %cst = arith.constant 0.0 : f32
     // CHECK: wave.register
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %c_reg = wave.register %cst : !wave.tensor<[@M, @N] of f32, <register>>
     // CHECK: wave.mma
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma = wave.mma %a_read, %b_read, %c_reg {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     wave.write %mma, %c : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
     return
   }
@@ -264,14 +252,12 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   ], wave.hyperparameters = #wave.hyperparameters<@M = 256 : i64, @N = 256 : i64, @K = 128 : i64, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64, @BLOCK_K = 32 : i64>} {
     // CHECK: wave.mma
     // CHECK-SAME: index
-    // CHECK-DAG: K : <[#wave.index_symbol<WG2>, #wave.index_symbol<T0>, #wave.index_symbol<T2>, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + WG2 * BLOCK_K + T2 * (BLOCK_K floordiv 4), 4, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + WG0 * BLOCK_M + (T0 floordiv 64) * (BLOCK_M floordiv 4), 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: K : <[#wave.index_symbol<WG2>, #wave.index_symbol<T0>, #wave.index_symbol<T2>, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + WG2 * BLOCK_K + T2 * (BLOCK_K floordiv 4), 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N + T1 * (BLOCK_N floordiv 4), 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (((T0 mod 64) floordiv 16) * 4 + WG0 * BLOCK_M + (T0 floordiv 64) * (BLOCK_M floordiv 4), 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N + T1 * (BLOCK_N floordiv 4), 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<WG2>, #wave.index_symbol<T0>, #wave.index_symbol<T2>, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + WG2 * BLOCK_K + T2 * (BLOCK_K floordiv 4), 4, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + WG0 * BLOCK_M + (T0 floordiv 64) * (BLOCK_M floordiv 4), 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<WG2>, #wave.index_symbol<T0>, #wave.index_symbol<T2>, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + WG2 * BLOCK_K + T2 * (BLOCK_K floordiv 4), 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N + T1 * (BLOCK_N floordiv 4), 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (((T0 mod 64) floordiv 16) * 4 + WG0 * BLOCK_M + (T0 floordiv 64) * (BLOCK_M floordiv 4), 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N + T1 * (BLOCK_N floordiv 4), 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
@@ -296,81 +282,75 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [1, 2, 2]>
   ]} {
     // CHECK: wave.read
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %a_read = wave.read %a
       : (!wave.tensor<[@M, @K] of f16>) -> !wave.tensor<[@M, @K] of f16, <register>>
     // CHECK: wave.read
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %b_read = wave.read %b
       : (!wave.tensor<[@N, @K] of f16>) -> !wave.tensor<[@N, @K] of f16, <register>>
     %cst_0 = arith.constant 0.0 : f32
     // CHECK: wave.register
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %c_reg = wave.register %cst_0
       : !wave.tensor<[@M, @N] of f32, <register>>
     // CHECK: wave.mma
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma1 = wave.mma %a_read, %b_read, %c_reg {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.cast
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma1_casted = wave.cast %mma1
       : !wave.tensor<[@M, @N] of f32, <register>> to !wave.tensor<[@M, @N] of f16, <register>>
 
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     wave.write %mma1_casted, %storage : !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16>
     // CHECK: wave.read
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     %reloaded = wave.read %storage : (!wave.tensor<[@M, @N] of f16>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     // Second read and register
     // CHECK: wave.read
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %d_read = wave.read %d
       : (!wave.tensor<[@P, @N] of f16>) -> !wave.tensor<[@P, @N] of f16, <register>>
     %cst_1 = arith.constant 0.0 : f32
     // CHECK: wave.register
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %c_reg2 = wave.register %cst_1
       : !wave.tensor<[@M, @P] of f32, <register>>
     // CHECK: wave.mma
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma2 = wave.mma %reloaded, %d_read, %c_reg2 {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@P, @N] of f16, <register>>, !wave.tensor<[@M, @P] of f32, <register>>) -> !wave.tensor<[@M, @P] of f32, <register>>
 
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     wave.write %mma2, %c : !wave.tensor<[@M, @P] of f32, <register>>, !wave.tensor<[@M, @P] of f32>
     return
   }
@@ -400,20 +380,17 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // First MMA operation
     // CHECK: wave.mma
     // LHS
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     // RHS
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Accumulator
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Result (matches the accumulator)
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %result1 = wave.mma %a, %b, %c1 {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
       -> !wave.tensor<[@M, @N] of f32>
@@ -421,8 +398,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Cast should have index expressions from the earlier mma because it is
     // given higher priority.
     // CHECK: wave.cast
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %result1_casted = wave.cast %result1
       : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of f16>
 
@@ -431,20 +408,17 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // not propagated from %result1_casted
     // CHECK: wave.mma
     // LHS
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     // RHS
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Accumulator (using %result1 from first MMA)
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Result (matches the accumulator)
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %result2 = wave.mma %result1_casted, %e, %c2 {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @N] of f16>, !wave.tensor<[@K, @N] of f16>, !wave.tensor<[@M, @K] of f32>)
       -> !wave.tensor<[@M, @K] of f32>
@@ -479,28 +453,23 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // ScaledMMA operation
     // CHECK: wave.scaled_mma
     // LHS
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
     // LHS scale
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K32 = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
     // RHS
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // RHS scale
-    // CHECK-DAG: K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @K32 = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Accumulator
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Result (matches the accumulator)
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %result1 = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c1 {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
       : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
          !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
@@ -509,8 +478,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Cast should have index expressions from the earlier scaled mma because it
     // is given higher priority.
     // CHECK: wave.cast
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %result1_casted = wave.cast %result1
       : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@M, @N] of f16>
 
@@ -519,20 +488,17 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // not propagated from %result1_casted
     // CHECK: wave.mma
     // LHS
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     // RHS
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Accumulator
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // Result (matches the accumulator)
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: P : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @P = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %result2 = wave.mma %result1_casted, %e, %c2 {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @N] of f16>, !wave.tensor<[@P, @N] of f16>, !wave.tensor<[@M, @P] of f32>)
       -> !wave.tensor<[@M, @P] of f32>
@@ -553,17 +519,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.mma
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x8_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
@@ -583,21 +546,18 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.mma
-    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  B : <[] -> (0, 1, 1)>
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
+    // CHECK-DAG:  @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 4, 4, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x8_f16>}
       : (!wave.tensor<[@B, @M, @K] of f16>, !wave.tensor<[@B, @N, @K] of f16>, !wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32>
     return
@@ -616,17 +576,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.mma
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 8, 8, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 8, 8, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 8, 8, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 8, 8, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x32_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
@@ -645,17 +602,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.mma
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 4) * 16 + ((T0 mod 64) floordiv 16) * 4 + GPR_NUM mod 4, 8, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 4) * 16 + ((T0 mod 64) floordiv 16) * 4 + GPR_NUM mod 4, 8, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 4) * 16 + ((T0 mod 64) floordiv 16) * 4 + GPR_NUM mod 4, 8, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 4) * 16 + ((T0 mod 64) floordiv 16) * 4 + GPR_NUM mod 4, 8, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x32_k4_f8>}
       : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
@@ -674,17 +628,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.mma
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
@@ -705,23 +656,18 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.scaled_mma
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K32 = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K32 = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // CHECK: vector_shape
     // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K = 128 : i64>
     // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K32 = 4 : i64>
@@ -751,23 +697,18 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.scaled_mma
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K32 : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K32 = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 16) * 64 + ((T0 mod 64) floordiv 16) * 16 + GPR_NUM mod 16, 32, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K32 = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 32, 1, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     // CHECK: vector_shape
     // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K = 128 : i64>
     // CHECK:  #wave.symbol_mapping<@M = 16 : i64, @K32 = 4 : i64>
@@ -795,17 +736,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [2, 3, 4]>
   ]} {
     // CHECK: wave.mma
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 4) * 8 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 8, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 4) * 8 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 8, 1)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 4) * 8 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 8, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> ((GPR_NUM floordiv 4) * 8 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 8, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_32x32x16_k4_f8>}
       : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
     return
@@ -828,8 +766,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %0 = arith.constant 0.0 : f32
 
     // CHECK:      wave.register
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     %c_reg = wave.register %0 : !wave.tensor<[@M, @N] of f32>
 
     // CHECK:      wave.iterate
@@ -841,18 +779,18 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       ^bb0(%acc: !wave.tensor<[@M, @N] of f32>):
 
         // CHECK:      wave.read
-        // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
-        // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+        // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
+        // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
         %a_reg = wave.read %a : (!wave.tensor<[@M, @K] of bf16, <shared>>) -> !wave.tensor<[@M, @K] of bf16>
 
         // CHECK:      wave.read
-        // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
-        // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+        // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
+        // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
         %b_reg = wave.read %b : (!wave.tensor<[@N, @K] of bf16, <shared>>) -> !wave.tensor<[@N, @K] of bf16>
 
         // CHECK:      wave.mma
-        // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
-        // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+        // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 32) * 8, 8, 1)>
+        // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
         %inner_acc = wave.mma %a_reg, %b_reg, %acc {kind = #wave.mma_kind<f32_32x32x16_bf16>} :
           (!wave.tensor<[@M, @K] of bf16>, !wave.tensor<[@N, @K] of bf16>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
 
@@ -861,8 +799,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     } : (!wave.tensor<[@M, @N] of f32>)-> (!wave.tensor<[@M, @N] of f32>)
 
     // CHECK:      wave.write
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.index_symbol<GPR_NUM>] -> (((GPR_NUM floordiv 4) * 8) mod 32 + ((T0 mod 64) floordiv 32) * 4 + GPR_NUM mod 4, 16, 32)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 32, 1, 1)>
     wave.write %mma_result, %c : !wave.tensor<[@M, @N] of f32> , !wave.tensor<[@M, @N] of f32, <global>>
 
     return
@@ -975,14 +913,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     %cst = arith.constant 1.0 : f16
     // CHECK: wave.register
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG:  K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     %b_reg = wave.register %cst : !wave.tensor<[@N, @K] of f16, <register>>
     %cst0 = arith.constant 0.0 : f32
     %c_reg = wave.register %cst0 : !wave.tensor<[@M, @N] of f32, <register>>
     // CHECK: wave.allocate
-    // CHECK-DAG:  M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG:  N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG:  @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG:  @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %alloc = wave.allocate {distributed_shape = #wave.expr_list<[] -> (42)>}
       : !wave.tensor<[@M, @N] of f32, <shared>>
     %c = wave.mma %a, %b_reg, %c_reg { kind = #wave.mma_kind<f32_16x16x16_f16> }
@@ -1011,17 +949,17 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.iterate @K iter_args() {
       %cst = arith.constant 1.0 : f16
       // CHECK: wave.register
-      // CHECK: K : <[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
+      // CHECK: @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
       %a_reg = wave.register %cst : !wave.tensor<[@M, @K] of f16, <register>>
       %b_reg = wave.register %cst : !wave.tensor<[@N, @K] of f16, <register>>
       // CHECK: wave.register
-      // CHECK: K : <[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
+      // CHECK: @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
       %cst0 = arith.constant 0.0 : f32
       %c_reg = wave.register %cst0 : !wave.tensor<[@M, @N] of f32, <register>>
       %alloc = wave.allocate {distributed_shape = #wave.expr_list<[] -> (42)>}
         : !wave.tensor<[@M, @N] of f32, <shared>>
       // CHECK: wave.mma
-      // CHECK: K : <[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
+      // CHECK: @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
       %c = wave.mma %a_reg, %b_reg, %c_reg { kind = #wave.mma_kind<f32_16x16x16_f16> }
         : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
       wave.write %c, %alloc : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <shared>>
@@ -1065,11 +1003,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.iterate @K iter_args({{.*}}) attributes {index = [#wave.symbol_mapping<@M = #wave.index_mapping<[] -> (0, 1, 1)>, @N = #wave.index_mapping<[] -> (0, 1, 1)>>]}
     %out = wave.iterate @K iter_args(%acc_init) captures(%mask) {
     ^bb0(%acc: !wave.tensor<[@M, @N] of f32>, %m: !wave.tensor<[@M, @N] of f32, <global>>):
-      // CHECK: wave.read{{.*}}index [{M : <[] -> (0, 1, 1)>, N : <[] -> (0, 1, 1)>}]
+      // CHECK: wave.read{{.*}}index [#wave.symbol_mapping<@M = #wave.index_mapping<[] -> (0, 1, 1)>, @N = #wave.index_mapping<[] -> (0, 1, 1)>>]
       // CHECK-NOT: wave.iter<"K">
       // CHECK-NOT: _Iter_K
       %m_read = wave.read %m : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32>
-      // CHECK: wave.add{{.*}}index [{M : <[] -> (0, 1, 1)>, N : <[] -> (0, 1, 1)>}]
+      // CHECK: wave.add{{.*}}index [#wave.symbol_mapping<@M = #wave.index_mapping<[] -> (0, 1, 1)>, @N = #wave.index_mapping<[] -> (0, 1, 1)>>]
       %sum = wave.add %acc, %m_read : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
       wave.yield %sum : !wave.tensor<[@M, @N] of f32>
     } : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32, <global>>) -> (!wave.tensor<[@M, @N] of f32>)
@@ -1095,19 +1033,19 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       wave.iterate @M iter_args() {
         %cst = arith.constant 1.0 : f16
         // CHECK: wave.register
-        // CHECK-DAG: K : <[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
-        // CHECK-DAG: M : <[#wave.index_symbol<T0>, #wave.iter<"M">, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + _Iter_M * BLOCK_M, 1, 1)>
+        // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
+        // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.iter<"M">, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + _Iter_M * BLOCK_M, 1, 1)>
         %a_reg = wave.register %cst : !wave.tensor<[@M, @K] of f16, <register>>
         %b_reg = wave.register %cst : !wave.tensor<[@N, @K] of f16, <register>>
         // CHECK: wave.register
-        // CHECK: K : <[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
+        // CHECK: @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
         %cst0 = arith.constant 0.0 : f32
         %c_reg = wave.register %cst0 : !wave.tensor<[@M, @N] of f32, <register>>
         %alloc = wave.allocate {distributed_shape = #wave.expr_list<[] -> (42)>}
           : !wave.tensor<[@M, @N] of f32, <shared>>
         // CHECK: wave.mma
-        // CHECK-DAG: K : <[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
-        // CHECK-DAG: M : <[#wave.index_symbol<T0>, #wave.iter<"M">, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + _Iter_M * BLOCK_M, 1, 1)>
+        // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.iter<"K">, #wave.symbol<"BLOCK_K">] -> (((T0 mod 64) floordiv 16) * 4 + _Iter_K * BLOCK_K, 4, 1)>
+        // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.iter<"M">, #wave.symbol<"BLOCK_M">] -> (T0 mod 16 + _Iter_M * BLOCK_M, 1, 1)>
         %c = wave.mma %a_reg, %b_reg, %c_reg { kind = #wave.mma_kind<f32_16x16x16_f16> }
           : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
         wave.write %c, %alloc : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <shared>>
@@ -1156,8 +1094,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Propagation-stopper heuristic prevents propagation from above because the
     // broadcast contains a dimension @P not included in the source vector shape.
     // CHECK: wave.broadcast
-    // CHECK-DAG: M : <[] -> (0, 1, 1)>
-    // CHECK-DAG: N : <[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[] -> (0, 1, 1)>
     %broadcasted = wave.broadcast %mma
       : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
@@ -1192,9 +1130,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // @M and @N get index exprs from mma1 (forward propagation).
     // @P gets index expr from mma2 via the add operation (backward propagation).
     // CHECK: wave.broadcast
-    // CHECK-DAG: M : <[] -> (0, 1, 1)>
-    // CHECK-DAG: N : <[] -> (0, 1, 1)>
-    // CHECK-DAG: P : <[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @P = #wave.index_mapping<[] -> (0, 1, 1)>
     %broadcasted = wave.broadcast %mma1
       : (!wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N, @P] of f32, <register>>
 
@@ -1227,8 +1165,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %cst = arith.constant 0.0 : f32
     // CHECK: wave.register
     // Backward propagation from MMA: register gets M index expr only (not N).
-    // CHECK:     M :
-    // CHECK-NOT: N :
+    // CHECK:     @M =
+    // CHECK-NOT: @N =
     %reg = wave.register %cst : !wave.tensor<[@M] of f32, <register>>
 
     // CHECK: wave.broadcast
@@ -1265,8 +1203,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     //   M: (((T0 mod 64) floordiv 16) * 4, 4, 16)  - stride 16
     //   N: (T0 mod 16, 1, 1)                        - stride 1
     // CHECK: wave.mma
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma_result = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
       -> !wave.tensor<[@M, @N] of f32>
@@ -1275,14 +1213,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     //   M: (((T0 mod 64) floordiv 16) * 4, 4, 1)   - stride becomes 1 (was N's stride)
     //   N: (T0 mod 16, 1, 16)                       - stride becomes 16 (was M's stride)
     // CHECK: wave.permute
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 16)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 16)>
     %permuted = wave.permute %mma_result
       : !wave.tensor<[@M, @N] of f32> to !wave.tensor<[@N, @M] of f32>
 
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 16)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 16)>
     wave.write %permuted, %dst : !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32, <global>>
 
     return
@@ -1306,25 +1244,25 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     // CHECK: wave.read
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
     // CHECK: wave.read
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %b_reg = wave.read %b : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.add
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %sum = wave.add %a_reg, %b_reg : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %sum, %output : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
@@ -1350,8 +1288,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %cst = arith.constant 0.0 : f32
     %reg = wave.register %cst : !wave.tensor<[@M, @N] of f32, <register>>
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * 8 + WG0 * BLOCK_M, 8, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * 8 + WG0 * BLOCK_M, 8, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK-DAG: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %reg, %output {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
@@ -1377,8 +1315,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %cst = arith.constant 0.0 : f32
     %reg = wave.register %cst : !wave.tensor<[@M, @N] of f32, <register>>
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64 + WG0 * BLOCK_M, 1, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 8, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64 + WG0 * BLOCK_M, 1, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 8, 1)>
     // CHECK-SAME: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 16 : i64>]
     wave.write %reg, %output {elements_per_thread = 8} : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
@@ -1407,17 +1345,17 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Read should get default index expression for B dimension (no constraints)
     // and computed expressions for M and N dimensions
     // CHECK: wave.read
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@B, @M, @N] of f32>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
 
     // Write should preserve the same index expressions
     // CHECK: wave.write
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %a_reg, %output : !wave.tensor<[@B, @M, @N] of f32, <register>>, !wave.tensor<[@B, @M, @N] of f32>
 
@@ -1447,33 +1385,33 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128, @BLOCK_M = 64 : i64, @BLOCK_N = 64 : i64>
   } {
     // CHECK: wave.read
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.read
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %b_reg = wave.read %b : (!wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // CHECK: wave.add
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     %sum = wave.add %a_reg, %b_reg : (!wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
 
     // Both writes establish the same index expressions
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %sum, %out1 : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> ((T0 mod 64) * (BLOCK_M ceildiv 64) + WG0 * BLOCK_M, BLOCK_M ceildiv 64, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 4 : i64, @N = 1 : i64>]
     wave.write %a_reg, %out2 : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
@@ -1496,14 +1434,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.hyperparameters = #wave.hyperparameters<@P = 8 : i64, @Q = 16 : i64>
   } {
     // CHECK: wave.read
-    // CHECK-DAG: P : <[] -> (0, 1, 1)>
-    // CHECK-DAG: Q : <[] -> (0, 1, 1)>
+    // CHECK-DAG: @P = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @Q = #wave.index_mapping<[] -> (0, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@P = 1 : i64, @Q = 1 : i64>]
     %a_reg = wave.read %a : (!wave.tensor<[@P, @Q] of f32>) -> !wave.tensor<[@P, @Q] of f32, <register>>
 
     // CHECK: wave.write
-    // CHECK-DAG: P : <[] -> (0, 1, 1)>
-    // CHECK-DAG: Q : <[] -> (0, 1, 1)>
+    // CHECK-DAG: @P = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @Q = #wave.index_mapping<[] -> (0, 1, 1)>
     // CHECK: vector_shape [#wave.symbol_mapping<@P = 1 : i64, @Q = 1 : i64>]
     wave.write %a_reg, %output : !wave.tensor<[@P, @Q] of f32, <register>>, !wave.tensor<[@P, @Q] of f32>
 
@@ -1545,8 +1483,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // to workgroup X with 64 threads in it, but we obtain step=4 propagate from the mma
     // above, because that has higher priority.
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (((T0 mod 64) floordiv 16) * 4 + WG0 * BLOCK_M
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (((T0 mod 64) floordiv 16) * 4 + WG0 * BLOCK_M
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T0 mod 16 + WG1 * BLOCK_N
     // CHECK: vector_shape [#wave.symbol_mapping<@M = 16 : i64, @N = 16 : i64>]
     wave.write %mma, %output : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32>
 
@@ -1566,47 +1504,44 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
                               waves_per_block = [1, 2, 2]>
   ]} {
     // CHECK: wave.read
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
     %a_read = wave.read %a
       : (!wave.tensor<[@B, @M, @K] of f16>) -> !wave.tensor<[@B, @M, @K] of f16, <register>>
     // CHECK: wave.read
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %b_read = wave.read %b
       : (!wave.tensor<[@B, @N, @K] of f16>) -> !wave.tensor<[@B, @N, @K] of f16, <register>>
     %cst = arith.constant 0.0 : f32
     // CHECK: wave.register
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %c_reg = wave.register %cst
       : !wave.tensor<[@B, @M, @N] of f32, <register>>
     // CHECK: wave.mma
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
-    // CHECK: }, {
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma = wave.mma %a_read, %b_read, %c_reg {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@B, @M, @K] of f16, <register>>, !wave.tensor<[@B, @N, @K] of f16, <register>>, !wave.tensor<[@B, @M, @N] of f32, <register>>) -> !wave.tensor<[@B, @M, @N] of f32, <register>>
     // The write should get its index expressions from the MMA result via backward propagation.
     // CHECK: wave.write
-    // CHECK-DAG: B : <[] -> (0, 1, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @B = #wave.index_mapping<[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     wave.write %mma, %c : !wave.tensor<[@B, @M, @N] of f32, <register>>, !wave.tensor<[@B, @M, @N] of f32>
     return
   }
@@ -1654,8 +1589,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // Add (identity trait) gets result index exprs from init (thread-independent constraints).
     // CHECK: wave.add
-    // CHECK-DAG: M : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N, 1, 1)>
     %sum = wave.add %a, %b : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32, <register>>
     return
   }
@@ -1701,7 +1636,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // Reduction result has shape [@N]; init has shape [@N]; input has [@N, @M].
     // CHECK: wave.max_element
-    // CHECK-DAG: N : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_N">] -> (WG0 * BLOCK_N, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_N">] -> (WG0 * BLOCK_N, 1, 1)>
     %result = wave.max_element %input init(%init) <warp> : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
     return
   }
