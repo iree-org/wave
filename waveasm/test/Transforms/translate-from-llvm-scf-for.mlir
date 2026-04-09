@@ -7,8 +7,8 @@
 // CHECK: waveasm.loop
 // Loop body: arith.add for the accumulation.
 // CHECK: waveasm.arith.add
-// IV increment.
-// CHECK: waveasm.arith.add
+// IV increment stays scalar.
+// CHECK: waveasm.s_add_u32
 // Condition: s_cmp_lt_u32 for the loop back-edge.
 // CHECK: waveasm.s_cmp_lt_u32
 // CHECK: waveasm.condition

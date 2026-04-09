@@ -222,6 +222,22 @@ static int64_t getGEPElementBytes(Type elemTy) {
   return 0;
 }
 
+/// Return true iff a GEP index is statically known to be zero.
+static bool isZeroGEPIndex(llvm::PointerUnion<IntegerAttr, Value> idx) {
+  if (isa<Value>(idx))
+    return isConstantIntValue(cast<Value>(idx), 0);
+  return isConstantIntValue(cast<IntegerAttr>(idx), 0);
+}
+
+/// Structural GEPs like [0, 0] are a no-op and can be forwarded even though we
+/// do not model nested aggregate layouts yet.
+static bool isAllZeroIndexGEP(LLVM::GEPOp op) {
+  for (auto idx : op.getIndices())
+    if (!isZeroGEPIndex(idx))
+      return false;
+  return true;
+}
+
 /// Compute the byte offset for a single-index GEP.
 /// Returns std::nullopt when the offset is zero or unsupported.
 static std::optional<Value> computeGEPByteOffset(LLVM::GEPOp op,
@@ -576,19 +592,26 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   auto &builder = ctx.getBuilder();
   auto loc = op.getLoc();
   Value base = op.getBase();
+  auto indices = op.getIndices();
+  bool isSingleIndex = indices.size() == 1;
+  bool isAllZeroGEP = isAllZeroIndexGEP(op);
 
   unsigned addrSpace = getLLVMAddrSpace(op.getBase());
 
   // LDS GEP (ptr<3>): compute byte offset for ds_read/ds_write.
   // DS instructions only accept a 32-bit vaddr, so truncate wide offsets.
   if (addrSpace == 3) {
+    if (!isSingleIndex && !isAllZeroGEP)
+      return op->emitOpError(
+          "LDS GEP must have a single index or all-zero structural indices");
     FailureOr<Value> baseOff = resolve(base, ctx);
     if (failed(baseOff))
       return op->emitOpError("unmapped LDS GEP base");
     VRegType vregTy = ctx.createVRegType();
     if (getRegSize(baseOff->getType()) > 1)
       *baseOff = ArithTruncOp::create(builder, loc, vregTy, *baseOff);
-    std::optional<Value> maybeOffset = computeGEPByteOffset(op, ctx);
+    std::optional<Value> maybeOffset =
+        isSingleIndex ? computeGEPByteOffset(op, ctx) : std::nullopt;
     if (!maybeOffset) {
       ctx.getMapper().mapValue(op.getResult(), *baseOff);
     } else {
@@ -608,7 +631,11 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   // make.buffer.rsrc. Propagate the mapper entry and accumulate the byte
   // offset so it can be folded into the SRD base later.
   if (addrSpace == 0) {
-    std::optional<Value> maybeOffset = computeGEPByteOffset(op, ctx);
+    if (!isSingleIndex && !isAllZeroGEP)
+      return op->emitOpError("bare-pointer GEP must have a single index or "
+                             "all-zero structural indices");
+    std::optional<Value> maybeOffset =
+        isSingleIndex ? computeGEPByteOffset(op, ctx) : std::nullopt;
     // Forward mapper entry so make.buffer.rsrc can find the SRD.
     if (std::optional<Value> mapped = ctx.getMapper().getMapped(base))
       ctx.getMapper().mapValue(op.getResult(), *mapped);
@@ -632,7 +659,6 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   }
 
   // Buffer GEP (ptr<7>): single dynamic index.
-  auto indices = op.getIndices();
   if (indices.size() != 1)
     return op->emitOpError("buffer GEP must have a single index");
   Value idx = indices[0].template dyn_cast<Value>();
@@ -874,52 +900,116 @@ static LogicalResult handleLDSStore(LLVM::StoreOp op, Value addr,
 static LogicalResult handleSDiv(LLVM::SDivOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
   auto &builder = ctx.getBuilder();
+  auto loc = op.getLoc();
   FailureOr<Value> lhs = resolve(op.getLhs(), ctx);
   if (failed(lhs))
     return op->emitOpError("unmapped operand in sdiv");
+  if (getRegSize(lhs->getType()) != 1)
+    return op->emitOpError(
+        "signed division currently supports only i32 operands");
 
-  // Power-of-2 constant divisor -> arithmetic shift right.
+  // Signed division by a positive power-of-2 constant:
+  //   q = (x + (x < 0 ? divisor - 1 : 0)) >> log2(divisor)
+  // This preserves LLVM's trunc-toward-zero semantics for negative dividends.
   if (auto constVal = getConstantIntValue(op.getRhs())) {
     int64_t divisor = *constVal;
     if (divisor > 0 && (divisor & (divisor - 1)) == 0) {
       int64_t shiftAmt = llvm::Log2_64(divisor);
-      auto immTy = ctx.createImmType(shiftAmt);
-      auto shiftConst =
-          ConstantOp::create(builder, op.getLoc(), immTy, shiftAmt);
-      auto vregTy = ctx.createVRegType();
-      Value result =
-          V_ASHRREV_I32::create(builder, op.getLoc(), vregTy, shiftConst, *lhs);
-      ctx.getMapper().mapValue(op.getResult(), result);
-      return success();
-    }
-  }
-  return op->emitOpError("signed division by non-power-of-2 not yet supported");
-}
-
-static LogicalResult handleSRem(LLVM::SRemOp op, LLVMTranslationState &st) {
-  auto &ctx = st.ctx;
-  auto &builder = ctx.getBuilder();
-  FailureOr<Value> lhs = resolve(op.getLhs(), ctx);
-  if (failed(lhs))
-    return op->emitOpError("unmapped operand in srem");
-
-  // Power-of-2 constant divisor -> v_and_b32 with (divisor - 1).
-  // Correct for non-negative dividends (thread IDs, indices).
-  if (auto constVal = getConstantIntValue(op.getRhs())) {
-    int64_t divisor = *constVal;
-    if (divisor > 0 && (divisor & (divisor - 1)) == 0) {
-      int64_t mask = divisor - 1;
-      auto immTy = ctx.createImmType(mask);
-      auto maskConst = ConstantOp::create(builder, op.getLoc(), immTy, mask);
-      auto vregTy = ctx.createVRegType();
-      Value result =
-          V_AND_B32::create(builder, op.getLoc(), vregTy, *lhs, maskConst);
+      auto zero = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
+      auto biasImm = ConstantOp::create(
+          builder, loc, ctx.createImmType(divisor - 1), divisor - 1);
+      auto shiftConst = ConstantOp::create(
+          builder, loc, ctx.createImmType(shiftAmt), shiftAmt);
+      Value result;
+      if (isSGPRType(lhs->getType())) {
+        auto sregTy = ctx.createSRegType();
+        auto sccTy = ctx.createSCCType();
+        Value isNegative =
+            S_CMP_LT_I32::create(builder, loc, sccTy, *lhs, zero);
+        Value bias = S_CSELECT_B32::create(builder, loc, sregTy, isNegative,
+                                           biasImm, zero);
+        Value biased = ArithAddOp::create(builder, loc, sregTy, *lhs, bias);
+        result =
+            S_ASHR_I32::create(builder, loc, sregTy, sccTy, biased, shiftConst)
+                .getDst();
+      } else {
+        auto vregTy = ctx.createVRegType();
+        Value isNegative = ArithCmpOp::create(builder, loc, vregTy,
+                                              CmpPredicate::slt, *lhs, zero);
+        Value bias = ArithSelectOp::create(builder, loc, vregTy, zero, biasImm,
+                                           isNegative);
+        Value biased = ArithAddOp::create(builder, loc, vregTy, *lhs, bias);
+        result =
+            V_ASHRREV_I32::create(builder, loc, vregTy, shiftConst, biased);
+      }
       ctx.getMapper().mapValue(op.getResult(), result);
       return success();
     }
   }
   return op->emitOpError(
-      "signed remainder by non-power-of-2 not yet supported");
+      "signed division currently supports only positive power-of-2 constants");
+}
+
+static LogicalResult handleSRem(LLVM::SRemOp op, LLVMTranslationState &st) {
+  auto &ctx = st.ctx;
+  auto &builder = ctx.getBuilder();
+  auto loc = op.getLoc();
+  FailureOr<Value> lhs = resolve(op.getLhs(), ctx);
+  if (failed(lhs))
+    return op->emitOpError("unmapped operand in srem");
+  if (getRegSize(lhs->getType()) != 1)
+    return op->emitOpError(
+        "signed remainder currently supports only i32 operands");
+
+  // Signed remainder by a positive power-of-2 constant:
+  //   r = x & (divisor - 1)
+  //   if (x < 0 && r != 0) r -= divisor
+  // This keeps the remainder's sign consistent with LLVM srem.
+  if (auto constVal = getConstantIntValue(op.getRhs())) {
+    int64_t divisor = *constVal;
+    if (divisor > 0 && (divisor & (divisor - 1)) == 0) {
+      auto zero = ConstantOp::create(builder, loc, ctx.createImmType(0), 0);
+      auto maskConst = ConstantOp::create(
+          builder, loc, ctx.createImmType(divisor - 1), divisor - 1);
+      auto negDivisor = ConstantOp::create(
+          builder, loc, ctx.createImmType(-divisor), -divisor);
+      Value result;
+      if (isSGPRType(lhs->getType())) {
+        auto sregTy = ctx.createSRegType();
+        auto sccTy = ctx.createSCCType();
+        Value rawRem =
+            ArithAndOp::create(builder, loc, sregTy, *lhs, maskConst);
+        Value isNegative =
+            S_CMP_LT_I32::create(builder, loc, sccTy, *lhs, zero);
+        Value isNonZero =
+            S_CMP_NE_I32::create(builder, loc, sccTy, rawRem, zero);
+        Value adjusted =
+            ArithAddOp::create(builder, loc, sregTy, rawRem, negDivisor);
+        Value maybeAdjusted = S_CSELECT_B32::create(
+            builder, loc, sregTy, isNonZero, adjusted, rawRem);
+        result = S_CSELECT_B32::create(builder, loc, sregTy, isNegative,
+                                       maybeAdjusted, rawRem);
+      } else {
+        auto vregTy = ctx.createVRegType();
+        Value rawRem =
+            ArithAndOp::create(builder, loc, vregTy, *lhs, maskConst);
+        Value isNegative = ArithCmpOp::create(builder, loc, vregTy,
+                                              CmpPredicate::slt, *lhs, zero);
+        Value isNonZero = ArithCmpOp::create(builder, loc, vregTy,
+                                             CmpPredicate::ne, rawRem, zero);
+        Value adjusted =
+            ArithAddOp::create(builder, loc, vregTy, rawRem, negDivisor);
+        Value maybeAdjusted = ArithSelectOp::create(
+            builder, loc, vregTy, rawRem, adjusted, isNonZero);
+        result = ArithSelectOp::create(builder, loc, vregTy, rawRem,
+                                       maybeAdjusted, isNegative);
+      }
+      ctx.getMapper().mapValue(op.getResult(), result);
+      return success();
+    }
+  }
+  return op->emitOpError(
+      "signed remainder currently supports only positive power-of-2 constants");
 }
 
 //===----------------------------------------------------------------------===//
@@ -1003,9 +1093,31 @@ static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
   if (failed(lb) || failed(ub) || failed(step))
     return op->emitOpError("unmapped operand in scf.for");
 
+  auto toI32SReg = [&](Value v, StringRef name) -> FailureOr<Value> {
+    if (getRegSize(v.getType()) != 1) {
+      op->emitOpError(name) << " must lower to i32";
+      return failure();
+    }
+    auto sregTy = ctx.createSRegType();
+    if (isSGPRType(v.getType()))
+      return v;
+    if (isImmType(v.getType()))
+      return S_MOV_B32::create(builder, loc, sregTy, v).getResult();
+    if (isVGPRType(v.getType()))
+      return V_READFIRSTLANE_B32::create(builder, loc, sregTy, v).getResult();
+    op->emitOpError(name) << " must lower to an SGPR or VGPR i32";
+    return failure();
+  };
+
+  FailureOr<Value> lbScalar = toI32SReg(*lb, "scf.for lower bound");
+  FailureOr<Value> ubScalar = toI32SReg(*ub, "scf.for upper bound");
+  FailureOr<Value> stepScalar = toI32SReg(*step, "scf.for step");
+  if (failed(lbScalar) || failed(ubScalar) || failed(stepScalar))
+    return failure();
+
   // Build init args: [lower_bound, iter_args...].
   SmallVector<Value> initArgs;
-  initArgs.push_back(*lb);
+  initArgs.push_back(*lbScalar);
   for (Value arg : op.getInitArgs()) {
     FailureOr<Value> resolved = resolve(arg, ctx);
     if (failed(resolved))
@@ -1034,18 +1146,12 @@ static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
 
   // Build loop increment and condition.
   Value inductionVar = bodyBlock.getArgument(0);
-  auto ivTy = inductionVar.getType();
-  Value nextIV = ArithAddOp::create(builder, loc, ivTy, inductionVar, *step);
-  // Condition must be SGPR/SCC for waveasm.condition.
   auto sregTy = ctx.createSRegType();
   auto sccTy = ctx.createSCCType();
-  Value scalarIV = nextIV;
-  Value scalarUB = *ub;
-  if (isVGPRType(nextIV.getType()))
-    scalarIV = V_READFIRSTLANE_B32::create(builder, loc, sregTy, nextIV);
-  if (isVGPRType(ub->getType()))
-    scalarUB = V_READFIRSTLANE_B32::create(builder, loc, sregTy, *ub);
-  Value cond = S_CMP_LT_U32::create(builder, loc, sccTy, scalarIV, scalarUB);
+  Value nextIV =
+      S_ADD_U32::create(builder, loc, sregTy, sccTy, inductionVar, *stepScalar)
+          .getDst();
+  Value cond = S_CMP_LT_U32::create(builder, loc, sccTy, nextIV, *ubScalar);
 
   // Collect iter args from yield.
   auto yieldOp = cast<scf::YieldOp>(op.getBody()->getTerminator());
