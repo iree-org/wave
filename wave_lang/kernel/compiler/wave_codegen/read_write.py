@@ -1382,6 +1382,11 @@ def _write_permlane_pack_to_global(
     duplicate store), avoiding divergent control flow. The buffer
     descriptor's ``valid_bytes`` handles out-of-bounds suppression.
 
+    TODO: Eliminate duplicate stores by using both outputs of
+    ``permlane16_swap``, letting each lane write the partner's assembled
+    data to the partner's destination address so every lane performs a
+    unique store.
+
     Preconditions:
       - The kernel must use swapped MFMA operands (B as LHS, A as RHS)
         so the accumulator's 4-contiguous values align with the output
