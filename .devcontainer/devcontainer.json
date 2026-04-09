@@ -1,14 +1,48 @@
-// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// For format details, see https://aka.ms/devcontainer.json.
 {
-	"name": "Wave",
-
+	"name": "devcontainer",
 	"build": {
-        "dockerfile": "Dockerfile"
-    },
-
-	"runArgs": [ "--device=/dev/kfd", "--device=/dev/dri", "--group-add=video", "--network=host", "--ipc=host" ],
-	"capAdd": ["SYS_PTRACE"],
-	"securityOpt": ["seccomp=unconfined"],
-
-	"postCreateCommand": "pre-commit install && pre-commit install --hook-type commit-msg"
+		"dockerfile": "Dockerfile",
+		"args": {
+			"UBUNTU_VERSION": "24.04",
+			"ROCM_VERSION": "6.4",
+			"LLVM_VERSION": "20",
+			"PYTHON_VERSION": "3.12"
+		}
+	},
+	"runArgs": [
+		"--device=/dev/kfd",
+		"--device=/dev/dri",
+		"--group-add=video",
+		"--ipc=host",
+		"--network=host"
+	],
+	"capAdd": [
+		"SYS_PTRACE"
+	],
+	// Optional: enables memory mapping, recommended for containers running in HPC environments.
+	// See https://rocm.docs.amd.com/projects/install-on-linux/en/latest/how-to/docker.html
+	"securityOpt": [
+		"seccomp=unconfined"
+	],
+	"containerUser": "ubuntu",
+	"mounts": [
+		// Use a dedicated Docker volume for the venv to avoid conflicts with a local .venv
+		// and to improve performance by keeping it inside the container's filesystem.
+		"source=${localWorkspaceFolderBasename}-venv,target=${containerWorkspaceFolder}/.venv,type=volume"
+	],
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-python.black-formatter",
+				"ms-python.mypy-type-checker",
+				"ms-python.debugpy",
+				"ms-python.vscode-python-envs",
+				"llvm-vs-code-extensions.vscode-mlir"
+			]
+		}
+	},
+	"postCreateCommand": "sudo chown ubuntu .venv"
 }
