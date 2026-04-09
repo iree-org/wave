@@ -16,11 +16,11 @@ from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
 from wave_lang.kernel.wave.utils.run_utils import set_default_run_config
 from wave_lang.kernel.wave.utils.torch_utils import device_randn, device_zeros
 
-from ..common.utils import require_cdna_3_or_4, require_e2e
+from ..common.utils import require_cdna4, require_e2e
 
 
 @require_e2e
-@require_cdna_3_or_4
+@require_cdna4
 @pytest.mark.parametrize(
     "shape,block_shape,waves_per_block",
     [
