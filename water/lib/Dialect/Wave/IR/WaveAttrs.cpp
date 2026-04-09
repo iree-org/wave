@@ -489,8 +489,7 @@ Attribute WaveHyperparameterAttr::parse(AsmParser &parser, Type) {
   if (parser.parseLess())
     return {};
 
-  SmallVector<WaveSymbolAttr> keys;
-  SmallVector<Attribute> values;
+  SmallVector<std::pair<WaveSymbolAttr, Attribute>> entries;
 
   if (failed(parser.parseOptionalGreater())) {
     do {
@@ -499,17 +498,16 @@ Attribute WaveHyperparameterAttr::parse(AsmParser &parser, Type) {
       if (failed(parser.parseSymbolName(nameAttr)) || parser.parseEqual() ||
           failed(parser.parseAttribute(value)))
         return {};
-      keys.push_back(WaveSymbolAttr::get(parser.getContext(), nameAttr));
-      values.push_back(value);
+      entries.emplace_back(WaveSymbolAttr::get(parser.getContext(), nameAttr),
+                           value);
     } while (succeeded(parser.parseOptionalComma()));
 
     if (parser.parseGreater())
       return {};
   }
 
-  auto mappingAttr =
-      WaveSymbolMappingAttr::getChecked([&]() { return parser.emitError(loc); },
-                                        parser.getContext(), keys, values);
+  auto mappingAttr = WaveSymbolMappingAttr::getChecked(
+      [&]() { return parser.emitError(loc); }, parser.getContext(), entries);
   if (!mappingAttr)
     return {};
 

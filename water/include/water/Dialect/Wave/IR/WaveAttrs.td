@@ -711,7 +711,7 @@ def WaveHyperparameterAttr : AttrDef<WaveDialect, "WaveHyperparameter"> {
     bool hasSymbol(::wave::WaveSymbolAttr symbol) const;
 
     /// Get the number of symbols in the mapping.
-    size_t getNumSymbols() const { return getMapping().getNumEntries(); }
+    size_t getNumSymbols() const { return getMapping().size(); }
   }];
 }
 

@@ -253,7 +253,7 @@ bool mlirAttributeIsAWaveHyperparameterAttr(MlirAttribute attr) {
 
 MlirAttribute mlirWaveHyperparameterAttrGet(MlirAttribute mapping) {
   auto symMapping = llvm::cast<wave::WaveSymbolMappingAttr>(unwrap(mapping));
-  assert(llvm::all_of(symMapping.getValues(),
+  assert(llvm::all_of(llvm::make_second_range(symMapping),
                       llvm::IsaPred<IntegerAttr, wave::WaveExprListAttr>) &&
          "expected mapping to contain only IntegerAttr or WaveExprListAttr "
          "values");

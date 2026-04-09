@@ -1095,7 +1095,7 @@ verifyIndexElementsPerThread(Operation *op, ArrayAttr indexAttr,
   if (!hyper)
     hyper = wave::WaveHyperparameterAttr::get(
         op->getContext(),
-        wave::WaveSymbolMappingAttr::get(op->getContext(), {}, {}));
+        wave::WaveSymbolMappingAttr::get(op->getContext(), {}));
 
   SmallVector<int64_t> shape =
       getUncollapsedVectorShape(tensorType.getShape(), indexMapping, hyper);

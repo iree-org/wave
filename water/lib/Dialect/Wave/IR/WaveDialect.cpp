@@ -42,7 +42,7 @@ static void
 attachAvailableSymbolsNote(InFlightDiagnostic &diag,
                            wave::WaveHyperparameterAttr hyperparam) {
   std::string availableSymbols = llvm::join(
-      llvm::map_range(hyperparam.getMapping().getKeys(),
+      llvm::map_range(llvm::make_first_range(hyperparam.getMapping()),
                       [](wave::WaveSymbolAttr sym) -> llvm::StringRef {
                         return sym.getName();
                       }),
@@ -489,7 +489,8 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
       return llvm::failure();
 
     llvm::SmallVector<StringRef> unusedNames;
-    for (wave::WaveSymbolAttr key : hyperparams.getMapping().getKeys()) {
+    for (wave::WaveSymbolAttr key :
+         llvm::make_first_range(hyperparams.getMapping())) {
       if (!usedSymbols.contains(key.getName()))
         unusedNames.push_back(key.getName());
     }
