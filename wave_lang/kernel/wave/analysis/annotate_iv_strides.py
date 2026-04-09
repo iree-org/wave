@@ -168,6 +168,31 @@ def _try_numerical_probe(flat, iv_sym, step):
     return base, sympy.Integer(stride_val)
 
 
+def _verify_stride_on_original(flat, iv_sym, step, base, stride):
+    """Numerically verify ``flat(iv=step*i) == base + i*stride``.
+
+    The divisibility-substitution path extracts the stride from a
+    simplified expression but the base comes from the original.
+    Floor/Mod interactions with the IV can invalidate this
+    decomposition, so we probe several concrete IV values.
+    """
+    free_syms = sorted(flat.free_symbols - {iv_sym}, key=str)
+    probe_map = {s: 137 + i * 31 for i, s in enumerate(free_syms)}
+    probe_map2 = {s: 251 + i * 47 for i, s in enumerate(free_syms)}
+
+    for pmap in (probe_map, probe_map2):
+        for i in range(8):
+            iv_val = step * i
+            orig = subs_idxc(flat.subs({iv_sym: iv_val})).subs(pmap)
+            expected = subs_idxc(base + i * stride).subs(pmap)
+            try:
+                if int(orig) != int(expected):
+                    return False
+            except (TypeError, ValueError):
+                return False
+    return True
+
+
 def _try_with_div_subs(flat, iv_sym, step, div_fwd, div_bwd):
     """Try stride extraction after applying divisibility substitutions.
 
@@ -179,6 +204,11 @@ def _try_with_div_subs(flat, iv_sym, step, div_fwd, div_bwd):
     The stride is extracted from the simplified expression but the base
     is computed from the ORIGINAL flat to preserve floor/Mod structure
     needed for correct MLIR integer lowering.
+
+    A numerical verification confirms the decomposition is valid in
+    the original domain; when floor/Mod terms interact with the IV
+    (e.g. in B-scale preshuffle mappings), the decomposition may be
+    invalid and the extraction is rejected.
     """
     if not div_fwd:
         return None
@@ -203,6 +233,10 @@ def _try_with_div_subs(flat, iv_sym, step, div_fwd, div_bwd):
         stride = mem_simplify(sympy.sympify(stride).subs(bwd_dict))
 
     base = safe_subs(flat, {iv_sym: sympy.Integer(0)})
+
+    if not _verify_stride_on_original(flat, iv_sym, step, base, stride):
+        return None
+
     return base, stride, method
 
 

@@ -4,6 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+import functools
 from typing import Any, Optional
 
 import math
@@ -74,7 +75,6 @@ from .emitter import (
     cast_vector,
     gen_sympy_index,
     gen_sympy_index_hoisted,
-    gen_sympy_index_no_affine,
     get_constant_attr,
     get_type_or_element_type,
     handle_op,
@@ -311,9 +311,8 @@ def _build_mask(
         return None
 
     idxc = IndexingContext.current()
-    subs_map = add_emitter_subs(emitter, dynamic_values)
 
-    mask_parts: list[Value] = []
+    conditions = []
     for key, bound in bounds.items():
         if isinstance(key, sympy.Symbol) and key in index:
             start = _get_start_index(index[key])
@@ -321,41 +320,15 @@ def _build_mask(
             last_dim = list(index)[fastest_dim]
             if key == last_dim:
                 start = start + idxc.iota(elements_per_thread)
-            cond = gen_sympy_index(subs_map, start < bound)
+            conditions.append(start < bound)
         else:
-            iv_sym, iv_val, all_iv_syms = _iv_context(emitter, key)
-            in_loop = _get_enclosing_scf_for() is not None
-            hoist_ip = _hoist_before_loop(emitter) if in_loop else None
-            key_val = gen_sympy_index_hoisted(
-                subs_map,
-                key,
-                iv_sym=iv_sym,
-                iv_val=iv_val,
-                hoist_ip=hoist_ip,
-                all_iv_syms=all_iv_syms,
-                iv_offset_cache=emitter.iv_offset_cache,
-            )
-            bound_val = gen_sympy_index(subs_map, bound)
-            if isinstance(key_val.type, VectorType) and not isinstance(
-                bound_val.type, VectorType
-            ):
-                bound_val = vector_d.broadcast(key_val.type, bound_val)
-            elif isinstance(bound_val.type, VectorType) and not isinstance(
-                key_val.type, VectorType
-            ):
-                key_val = vector_d.broadcast(bound_val.type, key_val)
-            cond = arith_d.cmpi(arith_d.CmpIPredicate.slt, key_val, bound_val)
+            conditions.append(key < bound)
 
-        mask_vec_type = VectorType.get(
-            [elements_per_thread], IntegerType.get_signless(1)
-        )
-        if cond.type != mask_vec_type:
-            cond = vector_d.broadcast(mask_vec_type, cond)
-        mask_parts.append(cond)
-
-    mask = mask_parts[0]
-    for part in mask_parts[1:]:
-        mask = arith_d.andi(mask, part)
+    mask_expr = functools.reduce(
+        lambda a, b: sympy.And(a, b),
+        conditions,
+    )
+    mask = gen_sympy_index(add_emitter_subs(emitter, dynamic_values), mask_expr)
 
     mask_vec_type = VectorType.get([elements_per_thread], IntegerType.get_signless(1))
     if mask.type != mask_vec_type:
@@ -636,11 +609,7 @@ def _compute_branchless_valid_bytes(
     )
     zero_valid = arith_d.constant(uint64, get_constant_attr(0, uint64))
 
-    subs_map = add_emitter_subs(emitter)
-    if _get_enclosing_scf_for() is not None:
-        cond_val = gen_sympy_index_no_affine(subs_map, guard_condition)
-    else:
-        cond_val = gen_sympy_index(subs_map, guard_condition)
+    cond_val = gen_sympy_index(add_emitter_subs(emitter), guard_condition)
     i1 = IntegerType.get_signless(1)
     if cond_val.type != i1:
         zero_idx = arith_d.constant(cond_val.type, 0)
@@ -1209,7 +1178,7 @@ def _handle_read_linear_index(
         subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
         sym_strides = _sym_strides_for_flat_memref(kb_src, input_shape)
         linear_buffer_ops = emitter.options.eliminate_epilogue
-        lin_src = _linear_read_linearize_memref_maybe_hoisted(
+        lin_src, _ = _linearize_memref_hoisted(
             emitter,
             kb_src,
             sym_strides,

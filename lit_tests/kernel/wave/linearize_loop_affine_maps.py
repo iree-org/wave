@@ -1,12 +1,19 @@
 # RUN: python %s | FileCheck %s
 
 """
-Test that linearization eliminates affine maps from the scf.for loop body.
+Test that linearization hoists loop-invariant index bases out of scf.for.
 
 When M, N, K are dynamic (not substituted at compile time), the pipelined
-loop body should contain no affine.apply operations -- all index
-computation should be lowered to plain arith ops by the linearization and
-stride-annotation passes.
+loop body should use hoisted ``arith.muli``/``arith.addi`` for GatherToLDS
+index computation rather than monolithic ``affine.apply`` ops with many
+operands.
+
+Reads whose flat index is truly affine in the IV (A-data GatherToLDS)
+get their stride annotated and codegen emits ``base + IV * stride``.
+Reads with complex preshuffle mappings that contain floor/Mod terms
+interacting with the IV (B-data, B-scale reads) may still use
+``affine.apply`` because the expression is not decomposable as
+``base + IV * stride`` in the symbolic domain.
 
 Two wave shapes are tested to cover different workgroup tiling patterns:
   (1, 4):  64 threads, 1 wave in M, 4 in N -- block (256, 192, 256)
@@ -46,26 +53,45 @@ def _compile_dynamic_preshuffle_b(shape, block, wave_shape):
 
 
 @run_test
-def test_no_affine_in_loop_1x4():
-    """Dynamic 256x192x256 block, (1,4) wave: no affine.apply inside scf.for."""
+def test_hoisted_indices_in_loop_1x4():
+    """Dynamic 256x192x256 block, (1,4) wave: GatherToLDS uses hoisted arith."""
     _compile_dynamic_preshuffle_b((8192, 3072, 8192), (256, 192, 256), (1, 4))
 
-    # CHECK-LABEL: test_no_affine_in_loop_1x4
+    # CHECK-LABEL: test_hoisted_indices_in_loop_1x4
     # CHECK:       func.func @
-    #              No affine.apply between the pipelined scf.for and its yield.
-    #              affine.apply may still appear in the epilogue after the loop.
+    #              Inside the pipelined scf.for, GatherToLDS reads should use
+    #              hoisted base + IV * stride (arith.muli + arith.addi), not
+    #              monolithic affine.apply with 6+ operands.
+    #              B-data reads (complex preshuffle) may still use affine.apply
+    #              because the expression is not decomposable as base + IV * stride.
     # CHECK:       scf.for
+    # CHECK:       arith.muli
+    # CHECK:       arith.addi
+    # CHECK:       gather_to_lds
+    #              KEY CHECK -- do not remove.  The affine.apply count and
+    #              CHECK-NOT verify that hoisting is working: only the
+    #              residual B-data/B-scale preshuffle reads (with floor/Mod
+    #              IV interaction) remain as affine.apply in the loop body.
+    # CHECK-COUNT-12: affine.apply
     # CHECK-NOT:   affine.apply
     # CHECK:       scf.yield
 
 
 @run_test
-def test_no_affine_in_loop_2x2():
-    """Dynamic 256x224x256 block, (2,2) wave: no affine.apply inside scf.for."""
+def test_hoisted_indices_in_loop_2x2():
+    """Dynamic 256x224x256 block, (2,2) wave: GatherToLDS uses hoisted arith."""
     _compile_dynamic_preshuffle_b((8192, 3584, 8192), (256, 224, 256), (2, 2))
 
-    # CHECK-LABEL: test_no_affine_in_loop_2x2
+    # CHECK-LABEL: test_hoisted_indices_in_loop_2x2
     # CHECK:       func.func @
     # CHECK:       scf.for
+    # CHECK:       arith.muli
+    # CHECK:       arith.addi
+    # CHECK:       gather_to_lds
+    #              KEY CHECK -- do not remove.  The affine.apply count and
+    #              CHECK-NOT verify that hoisting is working: only the
+    #              residual B-data/B-scale preshuffle reads (with floor/Mod
+    #              IV interaction) remain as affine.apply in the loop body.
+    # CHECK-COUNT-28: affine.apply
     # CHECK-NOT:   affine.apply
     # CHECK:       scf.yield
