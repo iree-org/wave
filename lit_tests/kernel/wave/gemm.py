@@ -2510,9 +2510,11 @@ def test_persistent_gemm():
     # CHECK-DAG:       %[[C304_I32:.+]] = arith.constant 304 : i32
     # CHECK-DAG:       %[[C128:.+]] = arith.constant 128 : index
     # CHECK:           %[[BLOCK_ID_X:.+]] = gpu.block_id  x upper_bound 304
+    # CHECK:           %[[CAST_I32:.+]] = arith.index_cast %[[BLOCK_ID_X]] : index to i32
+    # CHECK:           %[[CAST_IDX:.+]] = arith.index_cast %[[CAST_I32]] : i32 to index
 
     # Persistent loop
-    # CHECK:           %{{.*}} = scf.while (%[[ARG3:.+]] = %[[BLOCK_ID_X]]) : (index) -> index {
+    # CHECK:           %{{.*}} = scf.while (%[[ARG3:.+]] = %[[CAST_IDX]]) : (index) -> index {
     # CHECK:             %{{.*}} = arith.cmpi slt, %[[ARG3]], %[[C128]] : index
     # CHECK:             scf.condition(%{{.*}}) %[[ARG3]] : index
     # CHECK:           } do {
