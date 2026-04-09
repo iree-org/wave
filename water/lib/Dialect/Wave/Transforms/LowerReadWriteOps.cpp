@@ -259,7 +259,7 @@ static void buildVectorWrite(Location loc, PatternRewriter &rewriter, Value mem,
   }
 }
 
-// Return the index dictionary updated with respect to the mapping. Update the
+// Return the index mapping updated with respect to the mapping. Update the
 // orderedSyms and populate `updatedOrderedSyms` with the new order. Since the
 // only supported mappings are permutations now, the resulting index is the same
 // as the input and only the symbol order changes.

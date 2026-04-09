@@ -401,7 +401,7 @@ wave::WaveDialect::verifyOperationAttribute(Operation *op,
 
     // Verify that derived symbols do not form cycles.
     if (llvm::failed(wave::verifyHyperparameterAcyclicity(
-            hyperparams, op->getContext(), [&]() { return op->emitError(); })))
+            hyperparams, [&]() { return op->emitError(); })))
       return llvm::failure();
 
     for (auto [key, value] : hyperparams.getMapping().getMapping()) {

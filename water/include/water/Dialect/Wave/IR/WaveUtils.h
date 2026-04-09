@@ -29,7 +29,7 @@ getPositionOfVectorizedDim(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
                            wave::WaveSymbolMappingAttr indexMapping,
                            wave::WaveHyperparameterAttr hyper);
 
-// Return the vector shape implied by the index sequence and hyperparameteters,
+// Return the vector shape implied by the index sequence and hyperparameters,
 // i.e., the step expression of the index sequence evaluated using the
 // hyperparameter values. The step may be indicated as ShapedType::kDynamic if
 // it cannot be fully evaluated.
@@ -73,7 +73,7 @@ void permuteShape(llvm::ArrayRef<wave::WaveSymbolAttr> shape,
 /// Returns success if there are no cycles, or emits a diagnostic naming the
 /// cycle participants.
 llvm::LogicalResult verifyHyperparameterAcyclicity(
-    wave::WaveHyperparameterAttr hyperparams, mlir::MLIRContext *ctx,
+    wave::WaveHyperparameterAttr hyperparams,
     llvm::function_ref<mlir::InFlightDiagnostic()> emitError);
 
 /// Populates `constraints` with a mapping from an operation with a Wave

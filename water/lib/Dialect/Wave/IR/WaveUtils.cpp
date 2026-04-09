@@ -261,7 +261,7 @@ template <> struct GraphTraits<const HyperparamDepGraph *> {
 } // namespace llvm
 
 LogicalResult wave::verifyHyperparameterAcyclicity(
-    wave::WaveHyperparameterAttr hyperparams, MLIRContext *ctx,
+    wave::WaveHyperparameterAttr hyperparams,
     llvm::function_ref<InFlightDiagnostic()> emitError) {
   HyperparamDepGraph graph;
   for (auto [key, value] : hyperparams.getMapping().getMapping()) {

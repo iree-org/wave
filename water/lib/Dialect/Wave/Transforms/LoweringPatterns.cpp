@@ -425,7 +425,7 @@ public:
                      arith::IntegerOverflowFlags overflowFlags)
       : AffineExprVisitor<AffineExprExpander, Value>(), builder(builder),
         loc(loc), symbols(symbols), operands(operands),
-        hypeparameters(hypeparameters), targetType(targetType),
+        hyperparameters(hypeparameters), targetType(targetType),
         overflowFlags(overflowFlags) {}
 
   // Build a (splat) constant matching the target type.
@@ -496,7 +496,7 @@ public:
       return operands[operandAttr.getOperandNumber()];
     } else if (auto symbolAttr = dyn_cast<wave::WaveSymbolAttr>(
                    symbols[expr.getPosition()])) {
-      std::optional<int64_t> value = hypeparameters.getSymbolValue(symbolAttr);
+      std::optional<int64_t> value = hyperparameters.getSymbolValue(symbolAttr);
       assert(value && "failed to get symbol value");
       return getConstant(*value);
     }
@@ -512,7 +512,7 @@ private:
   Location loc;
   ArrayRef<Attribute> symbols;
   ArrayRef<Value> operands;
-  wave::WaveHyperparameterAttr hypeparameters;
+  wave::WaveHyperparameterAttr hyperparameters;
   Type targetType;
   arith::IntegerOverflowFlags overflowFlags;
 };
