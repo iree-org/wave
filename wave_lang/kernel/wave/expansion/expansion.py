@@ -865,6 +865,11 @@ def _fixup_region_node_common(
         fixed_init_args.append(fixed_arg)
 
     region_node.update_arg(init_args_field, fixed_init_args)
+    
+    # Expansion may multiply carried values. `Iterate.type` must match init_arg
+    # arity. `infer_types` ran before `expand_graph`, so refresh from the
+    # updated init_args here.
+    region_node.infer_type()
 
     for result_index, get_item in region_info.get_results.items():
         get_item.graph.inserting_before(get_item.fx_node)

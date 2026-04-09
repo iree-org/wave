@@ -1636,8 +1636,15 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     result_types = [
         _convert_wave_tensor_type(result.type, parse_ctx) for result in results
     ]
-    # Make sure the type on the iterate node gets populated.
-    iterate_op.infer_type()
+    # Set `Iterate.type` from MLIR result types, not `NestedRegionOp.infer_type()`.
+    # During import, `init_args` may not yet carry complete `Register`/`Memory`
+    # types for every operand (attention and other large graphs); `infer_type`
+    # would then produce wrong or partial `type` and break roundtrip comparison.
+    # Arity matches `infer_type`: one result -> scalar, several -> list.
+    if len(result_types) == 1:
+        iterate_op.fx_node.type = result_types[0]
+    else:
+        iterate_op.fx_node.type = result_types
 
     converted_attrs = _convert_supported_attrs(
         op,
