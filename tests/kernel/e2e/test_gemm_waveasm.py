@@ -4,7 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-"""GEMM through the water+waveasm pipeline (LLVM dialect → WaveASM → binary)."""
+"""GEMM through the water+waveasm pipeline (LLVM dialect -> WaveASM -> binary)."""
 
 import pytest
 import torch
