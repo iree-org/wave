@@ -9,11 +9,12 @@ from dataclasses import fields as dataclass_fields, is_dataclass
 
 import numpy as np
 from typing import (
+    Any,
     Callable,
+    Iterable,
     Optional,
     Sequence,
     TypeAlias,
-    Any,
 )
 
 import sympy
@@ -415,7 +416,7 @@ def _check_payloads_equivalent(
 def _pairs_for_nested_region_result_types(
     lhs: ResultType,
     rhs: ResultType,
-) -> Result[list[tuple[ResultType, ResultType]]]:
+) -> Result[Iterable[tuple[ResultType, ResultType]]]:
     """Build (lhs, rhs) pairs for comparing NestedRegionOp `type` fields.
 
     Same-length `zip` is the normal case. The arity-1-vs-N branch below should
@@ -427,19 +428,15 @@ def _pairs_for_nested_region_result_types(
     lhs_types = list(lhs) if isinstance(lhs, (list, tuple)) else [lhs]
     rhs_types = list(rhs) if isinstance(rhs, (list, tuple)) else [rhs]
     if len(lhs_types) == len(rhs_types):
-        pairs = list(zip(lhs_types, rhs_types))
-    elif not lhs_types or not rhs_types:
-        return Failure(
-            f"result type arity mismatch: {len(lhs_types)} vs {len(rhs_types)}"
-        )
+        pairs: Iterable[tuple[ResultType, ResultType]] = zip(lhs_types, rhs_types)
     # Workaround until Iterate `type` is always arity-aligned with GetResults.
     # TODO: fix those passes so roundtrip compares equal-arity `type` lists and
     # this broadcast can be removed.
     elif min(len(lhs_types), len(rhs_types)) == 1:
         if len(lhs_types) == 1:
-            pairs = [(lhs_types[0], rhs_t) for rhs_t in rhs_types]
+            pairs = ((lhs_types[0], rhs_t) for rhs_t in rhs_types)
         else:
-            pairs = [(lhs_t, rhs_types[0]) for lhs_t in lhs_types]
+            pairs = ((lhs_t, rhs_types[0]) for lhs_t in lhs_types)
     else:
         return Failure(
             f"result type arity mismatch: {len(lhs_types)} vs {len(rhs_types)}"

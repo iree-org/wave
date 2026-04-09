@@ -148,7 +148,7 @@ from wave_lang.kernel.ops.wave_ops import (
 from wave_lang.kernel.wave.utils.classes import ShuffleMode
 from attr_type_converter import (
     OPERAND_SYMBOL_NAME_WAVE_PREFIX,
-    convert_index_mapping_dict_to_sympy,
+    convert_symbol_mapping_attr_to_sympy,
     convert_mma_index_to_sympy,
     expr_list_attr_to_exprs,
     mlir_element_type_to_dtype,
@@ -401,7 +401,7 @@ def _convert_supported_attrs(
         assert (
             len(array_attr) == 1
         ), f"Expected single index mapping for {op.name}, got {len(array_attr)}"
-        return convert_index_mapping_dict_to_sympy(array_attr[0], derived_dims)
+        return convert_symbol_mapping_attr_to_sympy(array_attr[0], derived_dims)
 
     converters = {
         AttrNames.INDEX.mlir_name: _convert_non_mma_index,
@@ -912,14 +912,14 @@ def _check_operand_vector_shapes(
         )
 
 
-def _set_reduction_dim(
+def _set_mma_like_reduction_dim(
     fx_node: fx.Node,
     lhs_node: fx.Node,
     rhs_node: fx.Node,
     acc_node: fx.Node,
     op_name: str,
 ) -> None:
-    """Derive and set reduction_dim from lhs/rhs/acc shapes."""
+    """Derive and set reduction_dim for MMA / ScaledMMA from lhs/rhs/acc shapes."""
     lhs_shape = get_custom(lhs_node).type.symbolic_shape
     rhs_shape = get_custom(rhs_node).type.symbolic_shape
     acc_shape = get_custom(acc_node).type.symbolic_shape
@@ -1001,7 +1001,7 @@ def _handle_mma_like_op(op: MmaOp | ScaledMmaOp, parse_ctx: _OpParseContext) -> 
         if result_vs is not None:
             fx_op.fx_node.vector_shapes = result_vs
 
-    _set_reduction_dim(fx_op.fx_node, lhs_node, rhs_node, acc_node, op_name)
+    _set_mma_like_reduction_dim(fx_op.fx_node, lhs_node, rhs_node, acc_node, op_name)
     parse_ctx.add_mapping(op.result, fx_op.fx_node)
 
 
@@ -1618,7 +1618,7 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     iter_index = None
     if AttrNames.INDEX.mlir_name in op.attributes:
         index_array = op.attributes[AttrNames.INDEX.mlir_name]
-        iter_index = convert_index_mapping_dict_to_sympy(
+        iter_index = convert_symbol_mapping_attr_to_sympy(
             index_array[0], parse_ctx.derived_dims
         )
     else:
@@ -1818,15 +1818,15 @@ def convert_mlir_to_trace(
             deferred: dict[str, tuple[IndexSymbol, IndexExpr]] = {}
             for param in hyper_params.mapping:
                 sym = index_symbol(param.name)
-                if isinstance(param.attr, WaveExprListAttr):
-                    exprs = expr_list_attr_to_exprs(param.attr)
-                    assert len(exprs) == 1, (
-                        f"Expected single expression for derived dim {sym}, "
-                        f"got {len(exprs)}"
-                    )
-                    deferred[param.name] = (sym, exprs[0])
-                else:
+                if not isinstance(param.attr, WaveExprListAttr):
                     subs[sym] = param.attr.value
+                    continue
+                exprs = expr_list_attr_to_exprs(param.attr)
+                assert len(exprs) == 1, (
+                    f"Expected single expression for derived dim {sym}, "
+                    f"got {len(exprs)}"
+                )
+                deferred[param.name] = (sym, exprs[0])
             for name, (sym, expr) in deferred.items():
                 derived_dims[name] = expr
                 evaluated = expr.subs(subs)

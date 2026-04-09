@@ -46,7 +46,7 @@ if is_water_available():
     from mlir_converter.attr_type_converter import (
         _convert_affine_expr_to_sympy_expr,
         _convert_index_mapping_attr_to_sympy,
-        convert_index_mapping_dict_to_sympy,
+        convert_symbol_mapping_attr_to_sympy,
         convert_mma_index_to_sympy,
         _make_piecewise_sequence,
         ITER_SYMBOL_NAME_WAVE_PREFIX,
@@ -306,8 +306,8 @@ class TestConvertIndexMappingAttrToSympy:
         assert result.stride is None
 
 
-class TestConvertIndexMappingDictToSympy:
-    """Tests for convert_index_mapping_dict_to_sympy function."""
+class TestConvertSymbolMappingAttrToSympy:
+    """Tests for convert_symbol_mapping_attr_to_sympy."""
 
     def test_single_mapping(self):
         """Test conversion of dict with single index mapping."""
@@ -320,8 +320,8 @@ class TestConvertIndexMappingDictToSympy:
             symbols, start_map, step_map, stride_map
         )
 
-        dict_attr = wave.WaveSymbolMappingAttr.get({"dim0": mapping_attr})
-        result = convert_index_mapping_dict_to_sympy(dict_attr)
+        attr = wave.WaveSymbolMappingAttr.get({"dim0": mapping_attr})
+        result = convert_symbol_mapping_attr_to_sympy(attr)
 
         assert isinstance(result, dict)
         assert index_symbol("dim0") in result
@@ -348,8 +348,8 @@ class TestConvertIndexMappingDictToSympy:
             ir.AffineMap.get(0, 1, [ir.AffineConstantExpr.get(2)]),
         )
 
-        dict_attr = wave.WaveSymbolMappingAttr.get({"m": mapping1, "n": mapping2})
-        result = convert_index_mapping_dict_to_sympy(dict_attr)
+        attr = wave.WaveSymbolMappingAttr.get({"m": mapping1, "n": mapping2})
+        result = convert_symbol_mapping_attr_to_sympy(attr)
 
         assert len(result) == 2
         assert index_symbol("m") in result
@@ -393,7 +393,7 @@ class TestMakePiecewiseSequence:
 
 
 class TestConvertIndexMappingToSympy:
-    """Tests for convert_index_mapping_dict_to_sympy and convert_mma_index_to_sympy."""
+    """Tests for convert_symbol_mapping_attr_to_sympy and convert_mma_index_to_sympy."""
 
     def test_single_mapping(self):
         """Test conversion for a single WaveSymbolMappingAttr."""
@@ -407,7 +407,7 @@ class TestConvertIndexMappingToSympy:
         )
 
         mapping_attr = wave.WaveSymbolMappingAttr.get({"dim": mapping})
-        result = convert_index_mapping_dict_to_sympy(mapping_attr)
+        result = convert_symbol_mapping_attr_to_sympy(mapping_attr)
 
         assert isinstance(result, dict)
         assert index_symbol("dim") in result
@@ -618,7 +618,11 @@ class TestConvertIndexMappingToSympy:
         )
 
     def test_scaled_mma_six_entries(self):
-        """ScaledMMA: 6-entry layout with lhs_scale/rhs_scale carrying an extra dim."""
+        """ScaledMMA: 6-entry layout with lhs_scale/rhs_scale carrying an extra dim.
+
+        Contrasts `has_scale_operands=True` (this test) with the default four-operand
+        MMA path on the same tensor-side mappings: only the scaled call introduces S.
+        """
         m_sym = wave.WaveSymbolAttr.get("M")
         n_sym = wave.WaveSymbolAttr.get("N")
         k_sym = wave.WaveSymbolAttr.get("K")
@@ -697,6 +701,17 @@ class TestConvertIndexMappingToSympy:
                 result_dict,
             ]
         )
+
+        mma_tensor_only = convert_mma_index_to_sympy(
+            ir.ArrayAttr.get([lhs_dict, rhs_dict, acc_dict, result_dict])
+        )
+        assert index_symbol("S") not in mma_tensor_only
+        assert set(mma_tensor_only.keys()) == {
+            index_symbol("M"),
+            index_symbol("N"),
+            index_symbol("K"),
+        }
+
         result = convert_mma_index_to_sympy(array_attr, has_scale_operands=True)
 
         assert isinstance(result, dict)
@@ -707,4 +722,6 @@ class TestConvertIndexMappingToSympy:
             index_symbol("S"),
         }
         assert isinstance(result[index_symbol("M")].start, sympy.Piecewise)
+        # S comes only from lhs_scale / rhs_scale mappings, not the primary lhs dict.
+        assert index_symbol("S") not in convert_symbol_mapping_attr_to_sympy(lhs_dict)
         assert result[index_symbol("S")] == IndexSequence(sym.S, 4, 1)

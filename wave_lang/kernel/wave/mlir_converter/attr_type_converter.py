@@ -295,7 +295,7 @@ def _convert_index_mapping_attr_to_sympy(
     return IndexSequence(start, step, stride)
 
 
-def convert_index_mapping_dict_to_sympy(
+def convert_symbol_mapping_attr_to_sympy(
     mapping_attr: wave.WaveSymbolMappingAttr,
     derived_dims: dict[str, IndexExpr] | None = None,
 ) -> dict[IndexSymbol, IndexSequence]:
@@ -371,25 +371,30 @@ def convert_mma_index_to_sympy(
     (LHS vs ACC have different access patterns); N, K, and batch dims
     are consistent across operands.
     """
-    dd = derived_dims
     if has_scale_operands:
         assert (
             len(array_attr) == 6
         ), f"Expected 6 index mapping entries for ScaledMMA, got {len(array_attr)}"
-        lhs_index = convert_index_mapping_dict_to_sympy(array_attr[0], dd)
-        lhs_scale_index = convert_index_mapping_dict_to_sympy(array_attr[1], dd)
-        rhs_index = convert_index_mapping_dict_to_sympy(array_attr[2], dd)
-        rhs_scale_index = convert_index_mapping_dict_to_sympy(array_attr[3], dd)
-        acc_index = convert_index_mapping_dict_to_sympy(array_attr[4], dd)
-        result_index = convert_index_mapping_dict_to_sympy(array_attr[5], dd)
+        (
+            lhs_index,
+            lhs_scale_index,
+            rhs_index,
+            rhs_scale_index,
+            acc_index,
+            result_index,
+        ) = tuple(
+            convert_symbol_mapping_attr_to_sympy(mapping, derived_dims)
+            for mapping in array_attr
+        )
+
     else:
         assert (
             len(array_attr) == 4
         ), f"Expected 4 index mapping entries for MMA, got {len(array_attr)}"
-        lhs_index = convert_index_mapping_dict_to_sympy(array_attr[0], dd)
-        rhs_index = convert_index_mapping_dict_to_sympy(array_attr[1], dd)
-        acc_index = convert_index_mapping_dict_to_sympy(array_attr[2], dd)
-        result_index = convert_index_mapping_dict_to_sympy(array_attr[3], dd)
+        lhs_index = convert_symbol_mapping_attr_to_sympy(array_attr[0], derived_dims)
+        rhs_index = convert_symbol_mapping_attr_to_sympy(array_attr[1], derived_dims)
+        acc_index = convert_symbol_mapping_attr_to_sympy(array_attr[2], derived_dims)
+        result_index = convert_symbol_mapping_attr_to_sympy(array_attr[3], derived_dims)
 
     bmk_symbols = set(lhs_index.keys())
     bnk_symbols = set(rhs_index.keys())
@@ -422,6 +427,8 @@ def convert_mma_index_to_sympy(
                 f"{lhs_scale_index[sym]} vs {rhs_scale_index[sym]}"
             )
         scale_only = set(lhs_scale_index.keys()) - set(combined.keys())
-        for sym in scale_only:
+        # Appended after tensor M/N/K/batch (see docstring). Sort for stable
+        # insertion order.
+        for sym in sorted(scale_only, key=str):
             combined[sym] = lhs_scale_index[sym]
     return combined

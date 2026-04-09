@@ -28,7 +28,7 @@ if __name__ == "__main__":
         sys.path.append(_current_dir)
 
 from attr_type_converter import (
-    convert_index_mapping_dict_to_sympy,
+    convert_symbol_mapping_attr_to_sympy,
     convert_mma_index_to_sympy,
     dtype_to_mlir_scalar_type,
     get_operand_symbol_placeholders,
@@ -1751,7 +1751,7 @@ def _build_response(
                             f"index element {element} out of range for "
                             f"{op.name} with {len(index_array)} entries"
                         )
-                        index = convert_index_mapping_dict_to_sympy(
+                        index = convert_symbol_mapping_attr_to_sympy(
                             index_array[element]
                         )
                     inferred_attributes[attribute.value].update({"index": index})
