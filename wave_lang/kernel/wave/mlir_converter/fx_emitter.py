@@ -1636,15 +1636,8 @@ def _handle_iterate_op(op: IterateOp, parse_ctx: _OpParseContext) -> None:
     result_types = [
         _convert_wave_tensor_type(result.type, parse_ctx) for result in results
     ]
-    # The source trace stores a single type on the Iterate node when all
-    # results share the same type (the common case). Per-result types are
-    # tracked independently on each GetResult node. Collapse here to match.
-    if len(result_types) == 1 or (
-        result_types and all(t == result_types[0] for t in result_types)
-    ):
-        iterate_op.fx_node.type = result_types[0]
-    else:
-        iterate_op.fx_node.type = result_types
+    # Make sure the type on the iterate node gets populated.
+    iterate_op.infer_type()
 
     converted_attrs = _convert_supported_attrs(
         op,

@@ -412,6 +412,41 @@ def _check_payloads_equivalent(
     return Success() if lhs == rhs else Failure(f"value mismatch: {lhs} vs {rhs}")
 
 
+def _pairs_for_nested_region_result_types(
+    lhs: ResultType,
+    rhs: ResultType,
+) -> Result[list[tuple[ResultType, ResultType]]]:
+    """Build (lhs, rhs) pairs for comparing NestedRegionOp `type` fields.
+
+    Same-length `zip` is the normal case. The arity-1-vs-N branch below should
+    not be needed if `Iterate.type` always matched `NestedRegionOp.infer_type`
+    (one type per carry, list when several). Some passes still collapse multiple
+    GetResult types onto a single `type` on the iterate node. MLIR import does
+    not.
+    """
+    lhs_types = list(lhs) if isinstance(lhs, (list, tuple)) else [lhs]
+    rhs_types = list(rhs) if isinstance(rhs, (list, tuple)) else [rhs]
+    if len(lhs_types) == len(rhs_types):
+        pairs = list(zip(lhs_types, rhs_types))
+    elif not lhs_types or not rhs_types:
+        return Failure(
+            f"result type arity mismatch: {len(lhs_types)} vs {len(rhs_types)}"
+        )
+    # Workaround until Iterate `type` is always arity-aligned with GetResults.
+    # TODO: fix those passes so roundtrip compares equal-arity `type` lists and
+    # this broadcast can be removed.
+    elif min(len(lhs_types), len(rhs_types)) == 1:
+        if len(lhs_types) == 1:
+            pairs = [(lhs_types[0], rhs_t) for rhs_t in rhs_types]
+        else:
+            pairs = [(lhs_t, rhs_types[0]) for lhs_t in lhs_types]
+    else:
+        return Failure(
+            f"result type arity mismatch: {len(lhs_types)} vs {len(rhs_types)}"
+        )
+    return Success(pairs)
+
+
 def _check_result_types_equivalent(
     lhs: ResultType,
     rhs: ResultType,
@@ -426,6 +461,15 @@ def _check_result_types_equivalent(
         return Success()
     if rhs is None:
         return Failure("type lost: present in reference but absent in actual")
+
+    if isinstance(lhs, (list, tuple)) or isinstance(rhs, (list, tuple)):
+        zipped_results = _pairs_for_nested_region_result_types(lhs, rhs)
+        if not zipped_results:
+            return zipped_results
+        for i, (a, b) in enumerate(zipped_results.value):
+            if not (check_result := _check_result_types_equivalent(a, b, subs)):
+                return Failure(f"result type[{i}]: {check_result.error}")
+        return Success()
 
     if (lhs_shape := getattr(lhs, "symbolic_shape", None)) != (
         rhs_shape := getattr(rhs, "symbolic_shape", None)
