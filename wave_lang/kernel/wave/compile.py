@@ -534,6 +534,11 @@ def build_graph_passes(
 
     graph_passes.append(partial(coalesce_wide_stores, trace))
 
+    if options.coalesce_epilogue_stores:
+        from .coalesce_epilogue_stores import coalesce_epilogue_stores
+
+        graph_passes.append(partial(coalesce_epilogue_stores, trace))
+
     graph_passes += [
         partial(simplify_indices, trace, launchable.constraints),
         partial(

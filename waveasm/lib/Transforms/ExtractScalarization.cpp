@@ -24,6 +24,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/Support/DebugLog.h"
 
@@ -73,6 +74,100 @@ static LogicalResult peelSelect(Value v, Value &cond, Value &trueVal,
   return failure();
 }
 
+/// Recursively scalarize a vector value at element `k`.
+/// Propagates extract through elementwise ops, broadcasts, and constants.
+static Value scalarizeAtIndex(Value v, int64_t k, OpBuilder &rewriter,
+                              Location loc);
+
+/// Scalarize a single operand at index k. For vector operands, recurse.
+/// For scalar operands (already scalar or broadcast source), return as-is.
+static Value scalarizeOperand(Value v, int64_t k, OpBuilder &rewriter,
+                              Location loc) {
+  if (!isa<VectorType>(v.getType()))
+    return v;
+  return scalarizeAtIndex(v, k, rewriter, loc);
+}
+
+static Value scalarizeAtIndex(Value v, int64_t k, OpBuilder &rewriter,
+                              Location loc) {
+  if (!isa<VectorType>(v.getType()))
+    return v;
+
+  Operation *def = v.getDefiningOp();
+  if (!def)
+    return nullptr;
+
+  // broadcast(scalar) → scalar
+  if (auto bcast = dyn_cast<vector::BroadcastOp>(def))
+    return bcast.getSource();
+
+  // Dense constant → extract element k
+  if (auto constOp = dyn_cast<arith::ConstantOp>(def)) {
+    auto dense = dyn_cast<DenseElementsAttr>(constOp.getValue());
+    if (!dense)
+      return nullptr;
+    auto elemVal = getIntElement(dense, k);
+    if (!elemVal)
+      return nullptr;
+    Type scalarType = getElementTypeOrSelf(v.getType());
+    return arith::ConstantOp::create(
+        rewriter, loc, rewriter.getIntegerAttr(scalarType, *elemVal));
+  }
+
+  // Binary elementwise ops: propagate extract to both operands
+  if (isa<arith::AddIOp, arith::MulIOp, arith::SubIOp, arith::AndIOp,
+          arith::OrIOp, arith::XOrIOp, arith::ShRUIOp, arith::ShRSIOp,
+          arith::ShLIOp>(def)) {
+    Value lhs = scalarizeOperand(def->getOperand(0), k, rewriter, loc);
+    Value rhs = scalarizeOperand(def->getOperand(1), k, rewriter, loc);
+    if (!lhs || !rhs)
+      return nullptr;
+    return rewriter
+        .create(loc, def->getName().getIdentifier(), ValueRange{lhs, rhs},
+                lhs.getType(), def->getAttrs())
+        ->getResult(0);
+  }
+
+  // cmpi: propagate to both operands, result is scalar i1
+  if (auto cmpOp = dyn_cast<arith::CmpIOp>(def)) {
+    Value lhs = scalarizeOperand(cmpOp.getLhs(), k, rewriter, loc);
+    Value rhs = scalarizeOperand(cmpOp.getRhs(), k, rewriter, loc);
+    if (!lhs || !rhs)
+      return nullptr;
+    return arith::CmpIOp::create(rewriter, loc, cmpOp.getPredicate(), lhs, rhs);
+  }
+
+  // select: propagate to condition, true, false
+  if (auto selOp = dyn_cast<arith::SelectOp>(def)) {
+    Value cond = scalarizeOperand(selOp.getCondition(), k, rewriter, loc);
+    Value trueVal = scalarizeOperand(selOp.getTrueValue(), k, rewriter, loc);
+    Value falseVal = scalarizeOperand(selOp.getFalseValue(), k, rewriter, loc);
+    if (!cond || !trueVal || !falseVal)
+      return nullptr;
+    return arith::SelectOp::create(rewriter, loc, cond, trueVal, falseVal);
+  }
+
+  // index_cast: propagate through
+  if (auto castOp = dyn_cast<arith::IndexCastOp>(def)) {
+    Value inner = scalarizeOperand(castOp.getIn(), k, rewriter, loc);
+    if (!inner)
+      return nullptr;
+    Type resultScalar = getElementTypeOrSelf(castOp.getResult().getType());
+    return arith::IndexCastOp::create(rewriter, loc, resultScalar, inner);
+  }
+
+  // truncf: propagate through
+  if (auto truncOp = dyn_cast<arith::TruncFOp>(def)) {
+    Value inner = scalarizeOperand(truncOp.getIn(), k, rewriter, loc);
+    if (!inner)
+      return nullptr;
+    Type resultScalar = getElementTypeOrSelf(truncOp.getResult().getType());
+    return arith::TruncFOp::create(rewriter, loc, resultScalar, inner);
+  }
+
+  return nullptr;
+}
+
 /// Try to match and scalarize:
 ///   vector.extract[k] (
 ///     index_cast? (
@@ -81,6 +176,7 @@ static LogicalResult peelSelect(Value v, Value &cond, Value &trueVal,
 ///       )
 ///     )
 ///   )
+/// Falls back to general recursive scalarization for other patterns.
 /// Returns the scalar replacement value, or nullptr on failure.
 static Value tryScalarize(vector::ExtractOp extractOp, OpBuilder &rewriter) {
   auto staticPos = extractOp.getStaticPosition();
@@ -180,40 +276,39 @@ static Value tryScalarize(vector::ExtractOp extractOp, OpBuilder &rewriter) {
   }
 
   // Non-select path: extract[k]( index_cast?( addi(broadcast, dense) ) )
-  auto addOp = preIndexCast.getDefiningOp<arith::AddIOp>();
-  if (!addOp)
-    return nullptr;
+  if (auto addOp = preIndexCast.getDefiningOp<arith::AddIOp>()) {
+    Value broadcastSide = nullptr;
+    DenseElementsAttr dense;
 
-  Value broadcastSide = nullptr;
-  DenseElementsAttr dense;
+    for (int swap = 0; swap < 2; ++swap) {
+      Value lhs = swap ? addOp.getRhs() : addOp.getLhs();
+      Value rhs = swap ? addOp.getLhs() : addOp.getRhs();
 
-  for (int swap = 0; swap < 2; ++swap) {
-    Value lhs = swap ? addOp.getRhs() : addOp.getLhs();
-    Value rhs = swap ? addOp.getLhs() : addOp.getRhs();
-
-    auto bcast = lhs.getDefiningOp<vector::BroadcastOp>();
-    auto constOp = rhs.getDefiningOp<arith::ConstantOp>();
-    if (bcast && constOp) {
-      auto d = dyn_cast<DenseElementsAttr>(constOp.getValue());
-      if (d && !d.isSplat()) {
-        broadcastSide = bcast.getSource();
-        dense = d;
-        break;
+      auto bcast = lhs.getDefiningOp<vector::BroadcastOp>();
+      auto constOp = rhs.getDefiningOp<arith::ConstantOp>();
+      if (bcast && constOp) {
+        auto d = dyn_cast<DenseElementsAttr>(constOp.getValue());
+        if (d && !d.isSplat()) {
+          broadcastSide = bcast.getSource();
+          dense = d;
+          break;
+        }
+      }
+    }
+    if (broadcastSide) {
+      auto elemVal = getIntElement(dense, k);
+      if (elemVal) {
+        Type scalarType = broadcastSide.getType();
+        Value elemConst = arith::ConstantOp::create(
+            rewriter, loc, rewriter.getIntegerAttr(scalarType, *elemVal));
+        return arith::AddIOp::create(rewriter, loc, scalarType, broadcastSide,
+                                     elemConst);
       }
     }
   }
-  if (!broadcastSide)
-    return nullptr;
 
-  auto elemVal = getIntElement(dense, k);
-  if (!elemVal)
-    return nullptr;
-
-  Type scalarType = broadcastSide.getType();
-  Value elemConst = arith::ConstantOp::create(
-      rewriter, loc, rewriter.getIntegerAttr(scalarType, *elemVal));
-  return arith::AddIOp::create(rewriter, loc, scalarType, broadcastSide,
-                               elemConst);
+  // General fallback: recursively scalarize through elementwise ops.
+  return scalarizeAtIndex(src, k, rewriter, loc);
 }
 
 struct ExtractScalarizationPass
@@ -273,7 +368,8 @@ private:
     // Vector-typed arith ops (addi, index_cast, select on vectors).
     if (op->getNumResults() == 1 &&
         isa<VectorType>(op->getResult(0).getType()) &&
-        isa<arith::AddIOp, arith::IndexCastOp, arith::SelectOp>(op))
+        isa<arith::AddIOp, arith::IndexCastOp, arith::SelectOp, arith::CmpIOp,
+            arith::AndIOp, arith::MulIOp, arith::SubIOp, arith::TruncFOp>(op))
       return true;
     // Dense vector constants.
     if (auto constOp = dyn_cast<arith::ConstantOp>(op)) {

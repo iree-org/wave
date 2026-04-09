@@ -404,10 +404,6 @@ def _get_tagged_mxfp4_gemm_preshuffle_b_impl(
     K_PACKED = tkl.sym.K_PACKED
     K_SCALE_SHUFFLED = tkl.sym.K_SCALE_SHUFFLED
 
-    if wide_stores:
-        m_symbol = tkl.sym.m_symbol
-        n_symbol = tkl.sym.n_symbol
-
     constraints: list[tkw.Constraint] = [tkw.WorkgroupConstraint(M, BLOCK_M, 0)]
     constraints += [tkw.WorkgroupConstraint(N, BLOCK_N, 1)]
     constraints += [tkw.TilingConstraint(K, BLOCK_K)]
@@ -426,6 +422,8 @@ def _get_tagged_mxfp4_gemm_preshuffle_b_impl(
     constraints += [tkw.Assumption(K > BLOCK_K * 6)]
 
     if wide_stores:
+        m_symbol = tkl.sym.m_symbol
+        n_symbol = tkl.sym.n_symbol
         constraints += [tkw.IteratorBindings({m_symbol: M, n_symbol: N})]
         constraints += [tkw.Assumption(Eq(M % BLOCK_M, 0))]
         constraints += [tkw.Assumption(Eq(N % BLOCK_N, 0))]

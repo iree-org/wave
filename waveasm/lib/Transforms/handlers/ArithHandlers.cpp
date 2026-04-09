@@ -451,8 +451,20 @@ LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx) {
   Value zeroConst = createImmConst(0, builder, loc, ctx);
   V_CMP_NE_U32::create(builder, loc, *cond, zeroConst);
 
+  // v_cndmask_b32 requires VGPR sources — move from AGPR if needed.
+  Value trueV = *trueVal;
+  Value falseV = *falseVal;
+  if (isAGPRType(trueV.getType())) {
+    auto vregTmp = ctx.createVRegType();
+    trueV = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, trueV);
+  }
+  if (isAGPRType(falseV.getType())) {
+    auto vregTmp = ctx.createVRegType();
+    falseV = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, falseV);
+  }
+
   auto result =
-      V_CNDMASK_B32::create(builder, loc, vregType, *falseVal, *trueVal, *cond);
+      V_CNDMASK_B32::create(builder, loc, vregType, falseV, trueV, *cond);
   ctx.getMapper().mapValue(selectOp.getResult(), result);
   return success();
 }
@@ -539,7 +551,50 @@ LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx) {
   auto vecType = dyn_cast<VectorType>(srcType);
   int64_t numElems = vecType ? vecType.getNumElements() : 1;
 
-  if (numElems > 1) {
+  if (numElems > 1 && srcElemType.isF32() && dstElemType.isBF16()) {
+    Value srcVal = *src;
+    if (isAGPRType(srcVal.getType())) {
+      int64_t size = getRegSize(srcVal.getType());
+      auto vregType = ctx.createVRegType(size, size > 1 ? size : 1);
+      srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregType, srcVal);
+    }
+    Type srcRegType = srcVal.getType();
+
+    auto extractF32Elem = [&](int64_t i) -> Value {
+      if (auto pvreg = dyn_cast<PVRegType>(srcRegType)) {
+        int64_t baseIdx = pvreg.getIndex() + i;
+        auto elemType = PVRegType::get(builder.getContext(), baseIdx, 1);
+        return PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, 1);
+      }
+      auto elemType = ctx.createVRegType(1, 1);
+      return ExtractOp::create(builder, loc, elemType, srcVal,
+                               builder.getI64IntegerAttr(i));
+    };
+
+    SmallVector<Value> packedVals;
+    for (int64_t i = 0; i < numElems; i += 2) {
+      Value elemI = extractF32Elem(i);
+      Value elemJ;
+      if (i + 1 < numElems) {
+        elemJ = extractF32Elem(i + 1);
+      } else {
+        auto immZero = ctx.createImmType(0);
+        elemJ = ConstantOp::create(builder, loc, immZero, 0);
+      }
+      auto vregType = ctx.createVRegType();
+      packedVals.push_back(
+          V_CVT_PK_BF16_F32::create(builder, loc, vregType, elemI, elemJ));
+    }
+
+    Value result;
+    if (packedVals.size() == 1) {
+      result = packedVals[0];
+    } else {
+      auto packedType = ctx.createVRegType(packedVals.size(), 1);
+      result = PackOp::create(builder, loc, packedType, packedVals);
+    }
+    ctx.getMapper().mapValue(truncOp.getResult(), result);
+  } else if (numElems > 1) {
     ctx.getMapper().mapValue(truncOp.getResult(), *src);
   } else {
     Value srcVal = *src;

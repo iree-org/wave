@@ -972,6 +972,71 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             return formatter.format("v_cvt_pk_bf16_f32", operands);
           })
 
+      // V_PERMLANE16_SWAP_B32: swap lanes 16 apart.
+      // The hardware clobbers BOTH dst and src. When the allocator assigns
+      // dst==src, we must save the original to a scratch register, swap
+      // through another scratch, then restore the original.
+      .Case<V_PERMLANE16_SWAP_B32>(
+          [&](V_PERMLANE16_SWAP_B32 swapOp) -> std::optional<std::string> {
+            std::string dst = resolveValue(swapOp.getDst());
+            std::string src = resolveValue(swapOp.getSrc());
+            if (dst != src) {
+              llvm::SmallVector<std::string> operands = {dst, src};
+              return formatter.format("v_permlane16_swap_b32", operands);
+            }
+            // dst==src: save original, swap through scratch, restore original
+            std::string scratch0 = formatVGPRRange(kScratchVGPR, 1);
+            std::string scratch1 = formatVGPRRange(kScratchVGPR - 1, 1);
+            peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 1);
+            invalidateScratchCache();
+            // 1. Save original src to scratch0
+            // 2. Copy src to scratch1 for the swap
+            // 3. Swap: dst gets partner's scratch1, scratch1 clobbered
+            // 4. Restore original from scratch0 back to src
+            return "  v_mov_b32 " + scratch0 + ", " + src + "\n" +
+                   "  v_mov_b32 " + scratch1 + ", " + src + "\n" +
+                   "  v_permlane16_swap_b32 " + dst + ", " + scratch1 + "\n" +
+                   "  v_mov_b32 " + src + ", " + scratch0;
+          })
+
+      // V_ACCVGPR_READ_B32: unroll multi-register reads into scalar ops
+      .Case<V_ACCVGPR_READ_B32>(
+          [&](V_ACCVGPR_READ_B32 readOp) -> std::optional<std::string> {
+            Value dst = readOp.getDst();
+            Value src = readOp.getSrc();
+            int64_t dstSize = getRegSize(dst.getType());
+            int64_t srcSize = getRegSize(src.getType());
+            int64_t size = std::max(dstSize, srcSize);
+            if (size <= 1) {
+              return emitDefaultFormat(readOp, "v_accvgpr_read_b32");
+            }
+            int64_t dstBase = -1, srcBase = -1;
+            if (auto pv = dyn_cast<PVRegType>(dst.getType()))
+              dstBase = pv.getIndex();
+            else if (isVirtualRegType(dst.getType()))
+              dstBase = mapping.getPhysReg(dst);
+            if (auto pa = dyn_cast<PARegType>(src.getType()))
+              srcBase = pa.getIndex();
+            else if (isVirtualRegType(src.getType()))
+              srcBase = mapping.getPhysReg(src);
+            if (dstBase < 0 || srcBase < 0) {
+              llvm::errs() << "V_ACCVGPR_READ_B32 fallback: dstBase=" << dstBase
+                           << " srcBase=" << srcBase << " dstSize=" << dstSize
+                           << " srcSize=" << srcSize
+                           << " dstType=" << dst.getType()
+                           << " srcType=" << src.getType() << "\n";
+              return emitDefaultFormat(readOp, "v_accvgpr_read_b32");
+            }
+            std::string lines;
+            for (int64_t i = 0; i < size; ++i) {
+              if (i > 0)
+                lines += "\n";
+              lines += "  v_accvgpr_read_b32 v" + std::to_string(dstBase + i) +
+                       ", a" + std::to_string(srcBase + i);
+            }
+            return lines;
+          })
+
       // Carry ops: on GFX9, carry-out is implicit VCC.
       // v_add_co_u32:  dst, vcc, src0, src1
       // v_addc_co_u32: dst, vcc, src0, src1, vcc  (carry-in).

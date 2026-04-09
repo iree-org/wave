@@ -477,6 +477,34 @@ LivenessInfo computeLiveness(ProgramOp program) {
     }
   }
 
+  // Check for permlane swap ops — used by passes 2c and 3a1.
+  bool hasPermlaneSwaps = false;
+  for (auto *op : ops) {
+    if (isa<V_PERMLANE16_SWAP_B32>(op)) {
+      hasPermlaneSwaps = true;
+      break;
+    }
+  }
+
+  // Pass 2c: Extend V_PERMLANE16_SWAP_B32 source live ranges.
+  // The hardware clobbers BOTH dst and src registers. If the allocator
+  // assigns them the same physical register, the original value is lost.
+  // Extend the src's live range to match the dst's end point so the
+  // allocator cannot reuse src's register for dst.
+  if (hasPermlaneSwaps) {
+    for (auto *op : ops) {
+      if (auto swapOp = dyn_cast<V_PERMLANE16_SWAP_B32>(op)) {
+        Value src = swapOp.getSrc();
+        Value dst = swapOp.getDst();
+        auto srcIt = info.ranges.find(src);
+        auto dstIt = info.ranges.find(dst);
+        if (srcIt != info.ranges.end() && dstIt != info.ranges.end()) {
+          srcIt->second.end = std::max(srcIt->second.end, dstIt->second.end);
+        }
+      }
+    }
+  }
+
   // Note: Pass 3 (CFG-based backward dataflow liveness extension) has been
   // removed. It was needed for the old label-based control flow path where
   // loop back-edges were represented as explicit branch instructions. With
@@ -550,6 +578,30 @@ LivenessInfo computeLiveness(ProgramOp program) {
       }
     }
   });
+
+  // Pass 3a1: Extend pack result ranges to cover downstream users of extracted
+  // sub-values. Only needed when V_PERMLANE16_SWAP_B32 ops exist, since those
+  // allocate dst registers that can conflict with post-hoc pack sub-register
+  // assignments. When no permlane swaps exist, the standard pack handling
+  // (pass 3a) is sufficient.
+  if (hasPermlaneSwaps) {
+    for (auto *op : ops) {
+      auto extractOp = dyn_cast<ExtractOp>(op);
+      if (!extractOp)
+        continue;
+      Value source = extractOp.getVector();
+      auto sourceIt = info.ranges.find(source);
+      if (sourceIt == info.ranges.end())
+        continue;
+      Value extractResult = extractOp.getResult();
+      auto useIt = info.usePoints.find(extractResult);
+      if (useIt != info.usePoints.end()) {
+        for (int64_t use : useIt->second) {
+          sourceIt->second.end = std::max(sourceIt->second.end, use);
+        }
+      }
+    }
+  }
 
   // Pass 3a2: InsertOp pass -- treat insert result as an alias of the source
   // vector, but keep the inserted value in the allocator worklist.
