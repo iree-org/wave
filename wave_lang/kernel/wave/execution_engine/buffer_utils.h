@@ -60,4 +60,18 @@ double _mlir_ciface_wave_get_float64(PyObject *obj);
 ///   std::runtime_error if the object doesn't have a size() method or
 ///   if the dimension index is invalid
 int64_t _mlir_ciface_wave_get_dim(PyObject *obj, int32_t dim_idx);
+
+/// Extract the stride of a specific dimension from a PyObject (PyTorch tensor).
+///
+/// Args:
+///   obj: PyObject* pointing to a PyTorch tensor
+///   dim_idx: Dimension index to query (0-based)
+///
+/// Returns:
+///   Stride of the specified dimension in elements as int64_t.
+///
+/// Throws:
+///   std::runtime_error if the object doesn't have a stride() method or
+///   if the dimension index is invalid.
+int64_t _mlir_ciface_wave_get_stride(PyObject *obj, int32_t dim_idx);
 }

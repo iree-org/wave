@@ -322,8 +322,18 @@ class WaveEmitter:
 
         arg_types = [abi_type(b) for b in bindings]
 
+        # Match stride args added by emit_func when dynamic_strides is active.
+        stride_arg_count = 0
+        if self.options.dynamic_strides:
+            stride_arg_count = sum(
+                max(0, len(b.kernel_buffer_type.symbolic_shape) - 1)
+                for b in self.root_sig.sig.kernel_buffer_bindings
+            )
+            if stride_arg_count > 0:
+                arg_types += [IndexType.get()] * stride_arg_count
+
         ftype = FunctionType.get(arg_types, [])
-        locs = [a.location for a in kernel_func.body.blocks[0].arguments]
+        locs = [Location.unknown() for _ in arg_types]
 
         gpu_module = gpu_d.module("gpu_module")
         gpu_module.parent.operation.attributes["gpu.container_module"] = UnitAttr.get()
@@ -394,6 +404,11 @@ class WaveEmitter:
 
         get_float64_func, get_float64_func_symbol = self._declare_runtime_func(
             "wave_get_float64", [ptr], [f64], emit_c_interface=True
+        )
+
+        # Get tensor stride function from PyObject*.
+        get_stride_func, get_stride_func_symbol = self._declare_runtime_func(
+            "wave_get_stride", [ptr, i32], [i64], emit_c_interface=True
         )
 
         # Declare host function
@@ -489,6 +504,24 @@ class WaveEmitter:
                     launch_args.append(value)
                 else:
                     raise CodegenError(f"Unsupported binding type: {binding}")
+
+            # Append stride arguments matching the trailing index args
+            # added by emit_func. One stride per leading dimension (rank-1)
+            # for each kernel buffer.
+            if self.options.dynamic_strides:
+                for binding in self.root_sig.sig.kernel_buffer_bindings:
+                    rank = len(binding.kernel_buffer_type.symbolic_shape)
+                    leading_count = max(0, rank - 1)
+                    arg = func_args[binding_map[id(binding)]]
+                    for dim_idx in range(leading_count):
+                        dim = arith_d.constant(i32, dim_idx)
+                        stride = func_d.call(
+                            get_stride_func.type.results,
+                            get_stride_func_symbol,
+                            [arg, dim],
+                        )
+                        stride = arith_d.index_cast(IndexType.get(), stride)
+                        launch_args.append(stride)
 
             gpu_d.launch_func(
                 kernel=[gpu_module.sym_name.value, self.kernel_name],
