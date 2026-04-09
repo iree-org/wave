@@ -2544,6 +2544,76 @@ static void test_cmp_bounds_resolve(void) {
   CHECK(r != ixs_true(ctx) && r != ixs_false(ctx));
 }
 
+/* Mod bounds tightening via dividend step: upper bound is K - gcd(d, K)
+ * where d is the gcd of top-level integer coefficients (MUL coeff or
+ * ADD constant + term coefficients). */
+static void test_mod_scaled_bounds(void) {
+  ixs_ctx *ctx = get_ctx();
+  ixs_node *a = ixs_sym(ctx, "a");
+
+  /* floor(Mod(4*a + 3, 16) / 16) -> 0.
+   * mod_extract_small_const rewrites to 3 + Mod(4*a, 16).  With the
+   * tighter bound Mod(4*a, 16) <= 12, the argument of floor is in
+   * [3/16, 15/16], which floors to 0. */
+  ixs_node *expr = ixs_floor(
+      ctx, ixs_div(ctx,
+                   ixs_mod(ctx,
+                           ixs_add(ctx, ixs_mul(ctx, ixs_int(ctx, 4), a),
+                                   ixs_int(ctx, 3)),
+                           ixs_int(ctx, 16)),
+                   ixs_int(ctx, 16)));
+  CHECK(ixs_simplify(ctx, expr, NULL, 0) == ixs_int(ctx, 0));
+
+  /* floor(Mod(8*a + 5, 16) / 16) -> 0.
+   * Mod(8*a, 16) <= 8, so (5 + Mod(8*a, 16))/16 <= 13/16 < 1. */
+  expr = ixs_floor(
+      ctx, ixs_div(ctx,
+                   ixs_mod(ctx,
+                           ixs_add(ctx, ixs_mul(ctx, ixs_int(ctx, 8), a),
+                                   ixs_int(ctx, 5)),
+                           ixs_int(ctx, 16)),
+                   ixs_int(ctx, 16)));
+  CHECK(ixs_simplify(ctx, expr, NULL, 0) == ixs_int(ctx, 0));
+
+  /* Negative: floor((Mod(4*a, 16) + 13) / 16) stays as floor.
+   * Even with tight bound Mod(4*a, 16) <= 12, range [13,25]/16 spans
+   * two integers so the floor cannot collapse. */
+  {
+    ixs_node *mod4a =
+        ixs_mod(ctx, ixs_mul(ctx, ixs_int(ctx, 4), a), ixs_int(ctx, 16));
+    expr = ixs_floor(ctx, ixs_div(ctx, ixs_add(ctx, mod4a, ixs_int(ctx, 13)),
+                                  ixs_int(ctx, 16)));
+    ixs_node *r = ixs_simplify(ctx, expr, NULL, 0);
+    CHECK(ixs_node_tag(r) == IXS_FLOOR);
+  }
+
+  /* Concrete modulus: Mod(16*a + 1, 128) -> 1 + 16*a with 0 <= a < 8.
+   * mod_extract_small_const splits to 1 + Mod(16*a, 128), then
+   * bounds [0, 112] < 128 collapse the Mod. */
+  {
+    ixs_node *assumes[] = {
+        ixs_cmp(ctx, a, IXS_CMP_GE, ixs_int(ctx, 0)),
+        ixs_cmp(ctx, a, IXS_CMP_LT, ixs_int(ctx, 8)),
+    };
+    ixs_node *e = ixs_mod(
+        ctx, ixs_add(ctx, ixs_mul(ctx, ixs_int(ctx, 16), a), ixs_int(ctx, 1)),
+        ixs_int(ctx, 128));
+    ixs_node *r = ixs_simplify(ctx, e, assumes, 2);
+    CHECK(r ==
+          ixs_add(ctx, ixs_int(ctx, 1), ixs_mul(ctx, ixs_int(ctx, 16), a)));
+  }
+
+  /* ADD case: Mod(6*a + 4*b, 12) <= 10 (gcd(6,4)=2, gcd(2,12)=2). */
+  {
+    ixs_node *b = ixs_sym(ctx, "b");
+    ixs_node *inner = ixs_add(ctx, ixs_mul(ctx, ixs_int(ctx, 6), a),
+                              ixs_mul(ctx, ixs_int(ctx, 4), b));
+    expr = ixs_floor(ctx, ixs_div(ctx, ixs_mod(ctx, inner, ixs_int(ctx, 12)),
+                                  ixs_int(ctx, 12)));
+    CHECK(ixs_simplify(ctx, expr, NULL, 0) == ixs_int(ctx, 0));
+  }
+}
+
 int main(void) {
   test_add_canonicalize();
   test_mul_canonicalize();
@@ -2598,6 +2668,7 @@ int main(void) {
   test_cmp_const_fold();
   test_cmp_identity();
   test_cmp_bounds_resolve();
+  test_mod_scaled_bounds();
 
   printf("test_simplify: %d/%d passed\n", tests_passed, tests_run);
   return tests_passed == tests_run ? 0 : 1;

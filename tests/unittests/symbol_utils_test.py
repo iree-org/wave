@@ -127,10 +127,6 @@ def test_simplify_floor_of_bounded_fraction(simplify_fn):
     assert simplify_fn(expr) == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ixsimpl misses floor folding after shifted Mod canonicalization",
-)
 def test_simplify_floor_of_shifted_bounded_fraction():
     # floor(Mod(4*x + 3,16)/16) should resolve to 0.
     x = _sym("x")

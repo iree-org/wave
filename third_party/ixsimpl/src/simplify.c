@@ -619,32 +619,50 @@ static ixs_node *recognize_mod(ixs_ctx *ctx, ixs_addterm *terms,
                                int64_t const_q) {
   uint32_t i;
   int rc1, rc2;
+  ixs_node *result;
+  ixs_addterm *snap = NULL;
+
+  /* Snapshot terms so we can roll back if a pass hits OOM after
+   * partially rewriting entries (NULLing matched floor/ceil terms
+   * and replacing their partners with Mod nodes). */
+  if (nterms > 0) {
+    snap =
+        ixs_arena_alloc(&ctx->scratch, nterms * sizeof(*snap), sizeof(void *));
+    if (!snap)
+      return NULL;
+    memcpy(snap, terms, nterms * sizeof(*terms));
+  }
 
   rc1 = recognize_mod_const_div(ctx, terms, nterms);
   if (rc1 < 0)
-    return NULL;
+    goto rollback;
   rc2 = recognize_mod_sym_div(ctx, terms, nterms);
   if (rc2 < 0)
-    return NULL;
+    goto rollback;
   if (!rc1 && !rc2)
     return NULL;
 
   IXS_STAT_HIT(ctx);
-  ixs_node *result = make_const(ctx, const_p, const_q);
+  result = make_const(ctx, const_p, const_q);
   if (!result)
-    return NULL;
+    goto rollback;
   for (i = 0; i < nterms; i++) {
     ixs_node *t;
     if (!terms[i].term)
       continue;
     t = simp_mul(ctx, terms[i].coeff, terms[i].term);
     if (!t)
-      return NULL;
+      goto rollback;
     result = simp_add(ctx, result, t);
     if (!result)
-      return NULL;
+      goto rollback;
   }
   return result;
+
+rollback:
+  if (snap)
+    memcpy(terms, snap, nterms * sizeof(*terms));
+  return NULL;
 }
 
 /*
