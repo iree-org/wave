@@ -87,15 +87,10 @@ public:
   void setBaseOffset(Value ptr, Value offset) { baseOffsets[ptr] = offset; }
   Value lookupBaseOffset(Value ptr) const { return baseOffsets.lookup(ptr); }
 
-  /// Track LDS base values (from addressof / ptr<3> GEPs).
-  void setLDSBase(Value v) { ldsBaseValues.insert(v); }
-  bool isLDSBase(Value v) const { return ldsBaseValues.contains(v); }
-
 private:
   DenseMap<Value, Value> rsrcToSRD;
   DenseMap<Value, BufferPtrInfo> gepMap;
   DenseMap<Value, Value> baseOffsets;
-  DenseSet<Value> ldsBaseValues;
 };
 
 //===----------------------------------------------------------------------===//
@@ -203,6 +198,13 @@ static Type inferResultType(ValueRange operands, TranslationContext &ctx) {
     if (isVGPRType(v.getType()))
       return ctx.createVRegType(width, width);
   return ctx.createSRegType(width, width);
+}
+
+/// Return the LLVM pointer address space, or 0 for non-pointer types.
+static unsigned getLLVMAddrSpace(Value v) {
+  if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(v.getType()))
+    return ptrTy.getAddressSpace();
+  return 0;
 }
 
 /// Try to extract a constant integer from an LLVM SSA value.
@@ -605,7 +607,6 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
       Value sum = ArithAddOp::create(builder, loc, vregTy, *baseOff, off);
       ctx.getMapper().mapValue(op.getResult(), sum);
     }
-    st.setLDSBase(op.getResult());
     return success();
   }
 
@@ -694,7 +695,7 @@ static LogicalResult handleLoad(LLVM::LoadOp op, LLVMTranslationState &st) {
   auto loc = op.getLoc();
 
   // LDS load (ptr<3>).
-  if (st.isLDSBase(op.getAddr()))
+  if (getLLVMAddrSpace(op.getAddr()) == 3)
     return handleLDSLoad(op, op.getAddr(), st);
 
   std::optional<BufferPtrInfo> ptr = st.lookupGEP(op.getAddr());
@@ -744,7 +745,7 @@ static LogicalResult handleStore(LLVM::StoreOp op, LLVMTranslationState &st) {
   auto loc = op.getLoc();
 
   // LDS store (ptr<3>).
-  if (st.isLDSBase(op.getAddr()))
+  if (getLLVMAddrSpace(op.getAddr()) == 3)
     return handleLDSStore(op, op.getAddr(), st);
 
   std::optional<BufferPtrInfo> ptr = st.lookupGEP(op.getAddr());
@@ -803,7 +804,6 @@ static LogicalResult handleAddressOf(LLVM::AddressOfOp op,
   auto vregTy = ctx.createVRegType();
   Value mov = V_MOV_B32::create(builder, op.getLoc(), vregTy, zero);
   ctx.getMapper().mapValue(op.getResult(), mov);
-  st.setLDSBase(op.getResult());
   return success();
 }
 
