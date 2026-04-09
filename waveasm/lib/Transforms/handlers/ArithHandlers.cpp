@@ -543,48 +543,12 @@ LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx) {
   auto vecType = dyn_cast<VectorType>(srcType);
   int64_t numElems = vecType ? vecType.getNumElements() : 1;
 
-  if (numElems > 1 && srcElemType.isF32() && dstElemType.isBF16()) {
-    Value srcVal = *src;
-    // Not using ensureVGPR: multi-register AGPR→VGPR move needs explicit
-    // type construction to preserve size and alignment.
-    if (isAGPRType(srcVal.getType())) {
-      int64_t size = getRegSize(srcVal.getType());
-      auto vregType = ctx.createVRegType(size, size > 1 ? size : 1);
-      srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregType, srcVal);
-    }
-    Type srcRegType = srcVal.getType();
-
-    auto extractF32Elem = [&](int64_t i) -> Value {
-      if (auto pvreg = dyn_cast<PVRegType>(srcRegType)) {
-        int64_t baseIdx = pvreg.getIndex() + i;
-        auto elemType = PVRegType::get(builder.getContext(), baseIdx, 1);
-        return PrecoloredVRegOp::create(builder, loc, elemType, baseIdx, 1);
-      }
-      auto elemType = ctx.createVRegType(1, 1);
-      return ExtractOp::create(builder, loc, elemType, srcVal,
-                               builder.getI64IntegerAttr(i));
-    };
-
-    assert(numElems % 2 == 0 &&
-           "v_cvt_pk_bf16_f32 requires an even number of f32 elements");
-    SmallVector<Value> packedVals;
-    for (int64_t i = 0; i < numElems; i += 2) {
-      Value elemI = extractF32Elem(i);
-      Value elemJ = extractF32Elem(i + 1);
-      auto vregType = ctx.createVRegType();
-      packedVals.push_back(
-          V_CVT_PK_BF16_F32::create(builder, loc, vregType, elemI, elemJ));
-    }
-
-    Value result;
-    if (packedVals.size() == 1) {
-      result = packedVals[0];
-    } else {
-      auto packedType = ctx.createVRegType(packedVals.size(), 1);
-      result = PackOp::create(builder, loc, packedType, packedVals);
-    }
-    ctx.getMapper().mapValue(truncOp.getResult(), result);
-  } else if (numElems > 1) {
+  if (numElems > 1) {
+    // Multi-element truncf: pass through the source register mapping.
+    // The actual bf16 conversion (v_cvt_pk_bf16_f32) is deferred to the
+    // store handler in TranslateFromMLIR, which has the context to decide
+    // whether elements are extracted individually (non-wide-stores) or
+    // packed into dwordx4 (wide-stores).
     ctx.getMapper().mapValue(truncOp.getResult(), *src);
   } else {
     Value srcVal = ensureVGPR(*src, ctx, builder, loc);

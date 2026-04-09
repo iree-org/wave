@@ -118,13 +118,11 @@ class WaveCompileOptions:
     # keep read linearization without annotating every buffer.
     allow_noncontiguous_runtime_buffers: bool = False
 
-    # Dynamic strides pass stride arguments at runtime and use
-    # memref.extract_strided_metadata for address computation.  The WaveASM
-    # backend does not lower extract_strided_metadata, so dynamic strides
-    # are restricted to the LLVM backend.
+    # Dynamic strides are enabled whenever wave_runtime is active,
+    # supported by both LLVM and waveasm backends.
     @property
     def dynamic_strides(self) -> bool:
-        return self.wave_runtime and self.backend == "llvm"
+        return self.wave_runtime
 
     # === Print options ===
     mlir_print_ir_after_all: bool = False
