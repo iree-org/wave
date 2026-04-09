@@ -3,7 +3,7 @@
 """
 Test wide store coalescing for preshuffle-B MXFP4 GEMM with bf16 output.
 
-When wide_stores=True, the kernel swaps MFMA operands (B as LHS, A as RHS)
+The wide_store variant kernel swaps MFMA operands (B as LHS, A as RHS)
 so the accumulator's 4-contiguous values align with the output's stride-1
 dimension. The coalesce_wide_stores pass tags eligible bf16 global
 writes, and the codegen emits v_permlane16_swap_b32 to exchange data
@@ -23,7 +23,9 @@ import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.wave.compile import wave_compile
 from wave_lang.kernel.wave.constraints import ScaledMMAType
 from wave_lang.kernel.wave.schedules import get_mxfp4_asymmetric_schedule
-from wave_lang.kernel.wave.templates import get_tagged_mxfp4_gemm_preshuffle_b
+from wave_lang.kernel.wave.templates import (
+    get_tagged_mxfp4_gemm_preshuffle_b_wide_store,
+)
 from wave_lang.kernel.wave.utils.general_utils import run_test
 
 
@@ -31,13 +33,11 @@ from wave_lang.kernel.wave.utils.general_utils import run_test
 def test_wide_stores_preshuffle_b_mxfp4():
     shape = (1024, 3072, 8192)
     block = (256, 192, 256)
-    kernel, options = get_tagged_mxfp4_gemm_preshuffle_b(
+    kernel, options = get_tagged_mxfp4_gemm_preshuffle_b_wide_store(
         shape,
         block,
         wave_shape=(2, 2),
         reorder_workgroups=True,
-        output_dtype=tkl.bf16,
-        wide_stores=True,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
     )
     dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]

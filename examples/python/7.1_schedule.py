@@ -32,6 +32,7 @@ from wave_lang.kernel.wave.schedules import (
 from wave_lang.kernel.wave.templates import (
     get_tagged_mxfp4_gemm,
     get_tagged_mxfp4_gemm_preshuffle_b,
+    get_tagged_mxfp4_gemm_preshuffle_b_wide_store,
     get_tagged_mxfp4_gemm_preshuffle_scales,
     get_tagged_mxfp4_gemm_preshuffle_scales_and_B,
 )
@@ -432,18 +433,16 @@ def test_dbuf_4wave_mxfp_dynamic_preshuffle_b_gemm_wide_stores(
 ):
     """Preshuffle-B MXFP4 GEMM with dynamic M, N, K and wide epilogue stores.
 
-    Uses wide_stores=True to swap MFMA operands (B as LHS, A as RHS),
+    Uses the wide_store variant to swap MFMA operands (B as LHS, A as RHS),
     aligning the accumulator's contiguous values with the output's stride-1
     dimension. The coalesce_wide_stores pass emits v_permlane16_swap_b32
     + buffer_store_dwordx4 (8 bf16 per store) instead of buffer_store_short.
     """
-    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b(
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_b_wide_store(
         shape,
         block,
         wave_shape=(2, 2),
         reorder_workgroups=True,
-        output_dtype=tkl.bf16,
-        wide_stores=True,
     )
     dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
     for sym in dynamic_symbols:

@@ -1436,14 +1436,16 @@ def _write_permlane_pack_to_global(
     wide_i32 = vector_d.from_elements(v4i32_type, [d0, d1, d2, d3])
     wide_vec = vector_d.bitcast(v8bf16_type, wide_i32)
 
-    four = arith_d.constant(idx_type, 4)
+    elems_per_thread = arith_d.constant(idx_type, num_elems)
 
     adj_th = list(start_indices_th)
-    adj_th[-1] = arith_d.select(is_lower, adj_th[-1], arith_d.subi(adj_th[-1], four))
+    adj_th[-1] = arith_d.select(
+        is_lower, adj_th[-1], arith_d.subi(adj_th[-1], elems_per_thread)
+    )
 
     adj_full = list(start_indices)
     adj_full[-1] = arith_d.select(
-        is_lower, adj_full[-1], arith_d.subi(adj_full[-1], four)
+        is_lower, adj_full[-1], arith_d.subi(adj_full[-1], elems_per_thread)
     )
 
     _create_vec_read_write(

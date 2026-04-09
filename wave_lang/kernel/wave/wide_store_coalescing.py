@@ -5,12 +5,13 @@
 """
 Graph pass that tags eligible epilogue bf16 stores for wide store coalescing.
 
-When a kernel uses swapped MFMA operands (wide_stores=True), the
-accumulator's 4-contiguous values align with the output's stride-1
-dimension. This pass identifies Write nodes that use the source/target
-dimension remapping pattern (indicating swapped operands) and tags them
-so the codegen emits v_permlane16_swap_b32 + buffer_store_dwordx4
-instead of scalar buffer_store_short.
+When a kernel uses swapped MFMA operands (e.g.
+``get_tagged_mxfp4_gemm_preshuffle_b_wide_store``), the accumulator's
+4-contiguous values align with the output's stride-1 dimension. This
+pass identifies Write nodes that use the source/target dimension
+remapping pattern (indicating swapped operands) and tags them so the
+codegen emits v_permlane16_swap_b32 + buffer_store_dwordx4 instead of
+scalar buffer_store_short.
 
 Only tags writes that satisfy ALL conditions:
   1. Target memory is global address space
@@ -30,9 +31,9 @@ def coalesce_wide_stores(trace: CapturedTrace):
     """Tag eligible bf16 global writes for permlane16_swap wide stores.
 
     Only tags Write nodes that use the source/target dimension remapping
-    pattern, which indicates the kernel was built with ``wide_stores=True``
-    (swapped MFMA operands). Writes without source/target are left
-    untouched, making this pass safe to run unconditionally.
+    pattern (swapped MFMA operands, as produced by the wide_store kernel
+    variant). Writes without source/target are left untouched, making
+    this pass safe to run unconditionally.
     """
     import wave_lang.kernel.lang as tkl
 
