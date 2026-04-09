@@ -333,7 +333,10 @@ class WaveEmitter:
                 arg_types += [IndexType.get()] * stride_arg_count
 
         ftype = FunctionType.get(arg_types, [])
-        locs = [Location.unknown() for _ in arg_types]
+        # Preserve source locations for original args; synthesized stride args
+        # do not have an originating kernel SSA value.
+        locs = [a.location for a in kernel_func.body.blocks[0].arguments]
+        locs += [Location.unknown()] * (len(arg_types) - len(locs))
 
         gpu_module = gpu_d.module("gpu_module")
         gpu_module.parent.operation.attributes["gpu.container_module"] = UnitAttr.get()

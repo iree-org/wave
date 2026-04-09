@@ -207,18 +207,16 @@ static unsigned getLLVMAddrSpace(Value v) {
   return 0;
 }
 
-/// Try to extract a constant integer from an LLVM SSA value.
-/// Return the byte stride for a single-index GEP element type.
-/// Only handles sized scalars, vectors, and arrays of i8 (byte addressing).
+/// Return the byte size for a sized LLVM scalar, vector, or array type.
 /// Returns 0 for unsupported types.
-static int64_t getGEPElementBytes(Type elemTy) {
-  if (elemTy.isIntOrFloat())
-    return elemTy.getIntOrFloatBitWidth() / 8;
-  if (auto vecTy = dyn_cast<VectorType>(elemTy))
+static int64_t getLLVMTypeBytes(Type ty) {
+  if (ty.isIntOrFloat())
+    return ty.getIntOrFloatBitWidth() / 8;
+  if (auto vecTy = dyn_cast<VectorType>(ty))
     return vecTy.getNumElements() *
            vecTy.getElementType().getIntOrFloatBitWidth() / 8;
-  if (auto arrTy = dyn_cast<LLVM::LLVMArrayType>(elemTy))
-    return getGEPElementBytes(arrTy.getElementType()) * arrTy.getNumElements();
+  if (auto arrTy = dyn_cast<LLVM::LLVMArrayType>(ty))
+    return getLLVMTypeBytes(arrTy.getElementType()) * arrTy.getNumElements();
   return 0;
 }
 
@@ -238,10 +236,11 @@ static bool isAllZeroIndexGEP(LLVM::GEPOp op) {
   return true;
 }
 
-/// Compute the byte offset for a single-index GEP.
-/// Returns std::nullopt when the offset is zero or unsupported.
-static std::optional<Value> computeGEPByteOffset(LLVM::GEPOp op,
-                                                 TranslationContext &ctx) {
+/// Compute the non-zero byte offset for a supported single-index GEP.
+/// Emits a diagnostic and returns failure for unsupported element types or
+/// unmapped dynamic indices.
+static FailureOr<Value> computeGEPByteOffset(LLVM::GEPOp op,
+                                             TranslationContext &ctx) {
   OpBuilder &builder = ctx.getBuilder();
   Location loc = op.getLoc();
   auto indices = op.getIndices();
@@ -249,30 +248,32 @@ static std::optional<Value> computeGEPByteOffset(LLVM::GEPOp op,
   // Only handle single-index GEPs. Multi-index GEPs walk nested types
   // and require full DataLayout support.
   if (indices.size() != 1)
-    return std::nullopt;
+    return op->emitOpError("GEP byte offset requires a single index");
 
-  int64_t elemBytes = getGEPElementBytes(op.getElemType());
+  int64_t elemBytes = getLLVMTypeBytes(op.getElemType());
+  if (elemBytes == 0)
+    return op->emitOpError(
+        "unsupported GEP element type for byte offset computation");
 
   auto idx = indices[0];
   if (Value dynIdx = idx.dyn_cast<Value>()) {
     FailureOr<Value> resolved = resolve(dynIdx, ctx);
     if (failed(resolved))
-      return std::nullopt;
-    if (elemBytes <= 1)
+      return op->emitOpError("unmapped GEP index");
+    if (elemBytes == 1)
       return *resolved;
     // Scale by element size: offset = index * elemBytes.
     ImmType scaleTy = ctx.createImmType(elemBytes);
     Value scale = ConstantOp::create(builder, loc, scaleTy, elemBytes);
     Type resTy = inferResultType({*resolved, scale}, ctx);
-    return ArithMulOp::create(builder, loc, resTy, *resolved, scale);
+    return ArithMulOp::create(builder, loc, resTy, *resolved, scale)
+        .getResult();
   }
 
   int64_t constIdx = cast<IntegerAttr>(idx).getInt();
-  if (constIdx == 0)
-    return std::nullopt;
-  int64_t byteOffset = constIdx * std::max(elemBytes, int64_t{1});
+  int64_t byteOffset = constIdx * elemBytes;
   ImmType immTy = ctx.createImmType(byteOffset);
-  return ConstantOp::create(builder, loc, immTy, byteOffset);
+  return ConstantOp::create(builder, loc, immTy, byteOffset).getResult();
 }
 
 //===----------------------------------------------------------------------===//
@@ -610,17 +611,18 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
     VRegType vregTy = ctx.createVRegType();
     if (getRegSize(baseOff->getType()) > 1)
       *baseOff = ArithTruncOp::create(builder, loc, vregTy, *baseOff);
-    std::optional<Value> maybeOffset =
-        isSingleIndex ? computeGEPByteOffset(op, ctx) : std::nullopt;
-    if (!maybeOffset) {
+    if (isAllZeroGEP) {
       ctx.getMapper().mapValue(op.getResult(), *baseOff);
-    } else {
-      Value off = *maybeOffset;
-      if (getRegSize(off.getType()) > 1)
-        off = ArithTruncOp::create(builder, loc, vregTy, off);
-      Value sum = ArithAddOp::create(builder, loc, vregTy, *baseOff, off);
-      ctx.getMapper().mapValue(op.getResult(), sum);
+      return success();
     }
+    FailureOr<Value> maybeOffset = computeGEPByteOffset(op, ctx);
+    if (failed(maybeOffset))
+      return failure();
+    Value off = *maybeOffset;
+    if (getRegSize(off.getType()) > 1)
+      off = ArithTruncOp::create(builder, loc, vregTy, off);
+    Value sum = ArithAddOp::create(builder, loc, vregTy, *baseOff, off);
+    ctx.getMapper().mapValue(op.getResult(), sum);
     return success();
   }
 
@@ -634,19 +636,20 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
     if (!isSingleIndex && !isAllZeroGEP)
       return op->emitOpError("bare-pointer GEP must have a single index or "
                              "all-zero structural indices");
-    std::optional<Value> maybeOffset =
-        isSingleIndex ? computeGEPByteOffset(op, ctx) : std::nullopt;
     // Forward mapper entry so make.buffer.rsrc can find the SRD.
     if (std::optional<Value> mapped = ctx.getMapper().getMapped(base))
       ctx.getMapper().mapValue(op.getResult(), *mapped);
 
-    if (!maybeOffset) {
+    if (isAllZeroGEP) {
       Value prevOffset = st.lookupBaseOffset(base);
       if (prevOffset)
         st.setBaseOffset(op.getResult(), prevOffset);
       return success();
     }
 
+    FailureOr<Value> maybeOffset = computeGEPByteOffset(op, ctx);
+    if (failed(maybeOffset))
+      return failure();
     Value newOffset = *maybeOffset;
     Value prevOffset = st.lookupBaseOffset(base);
     if (prevOffset) {
@@ -807,9 +810,7 @@ static LogicalResult handleAddressOf(LLVM::AddressOfOp op,
       op, op.getGlobalNameAttr());
   if (global) {
     auto globalTy = global.getType();
-    int64_t sizeBytes = 0;
-    if (auto arrTy = dyn_cast<LLVM::LLVMArrayType>(globalTy))
-      sizeBytes = arrTy.getNumElements();
+    int64_t sizeBytes = getLLVMTypeBytes(globalTy);
     if (sizeBytes > 0)
       ctx.addLDSSize(sizeBytes);
   }
@@ -1093,6 +1094,8 @@ static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
   if (failed(lb) || failed(ub) || failed(step))
     return op->emitOpError("unmapped operand in scf.for");
 
+  // TODO: Preserve full scf.for zero-trip semantics. waveasm.loop is do-while
+  // and this lowering currently assumes the trip count is known positive.
   auto toI32SReg = [&](Value v, StringRef name) -> FailureOr<Value> {
     if (getRegSize(v.getType()) != 1) {
       op->emitOpError(name) << " must lower to i32";
