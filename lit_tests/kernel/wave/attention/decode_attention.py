@@ -339,7 +339,7 @@ def test_gqa_flash_decoding():
     # CHECK-LABEL:          func.func @phase_0
     # CHECK:                   scf.for
     # CHECK:                      amdgpu.lds_barrier
-    # CHECK-COUNT-16:             vector.maskedload
+    # CHECK-COUNT-16:             vector.load
     # CHECK-COUNT-16:             vector.store
     # CHECK:                      amdgpu.lds_barrier
     # CHECK-COUNT-4:              amdgpu.mfma
