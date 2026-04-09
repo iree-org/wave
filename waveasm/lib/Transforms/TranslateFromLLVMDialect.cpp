@@ -208,49 +208,55 @@ static unsigned getLLVMAddrSpace(Value v) {
 }
 
 /// Try to extract a constant integer from an LLVM SSA value.
-static std::optional<int64_t> getConstantInt(Value v) {
-  if (auto constOp = v.getDefiningOp<LLVM::ConstantOp>())
-    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
-      return intAttr.getValue().getSExtValue();
-  return std::nullopt;
+/// Return the byte stride for a single-index GEP element type.
+/// Only handles sized scalars, vectors, and arrays of i8 (byte addressing).
+/// Returns 0 for unsupported types.
+static int64_t getGEPElementBytes(Type elemTy) {
+  if (elemTy.isIntOrFloat())
+    return elemTy.getIntOrFloatBitWidth() / 8;
+  if (auto vecTy = dyn_cast<VectorType>(elemTy))
+    return vecTy.getNumElements() *
+           vecTy.getElementType().getIntOrFloatBitWidth() / 8;
+  if (auto arrTy = dyn_cast<LLVM::LLVMArrayType>(elemTy))
+    return getGEPElementBytes(arrTy.getElementType()) * arrTy.getNumElements();
+  return 0;
 }
 
-/// Compute the byte offset for a GEP as a single WaveASM Value.
-/// For all-zero constant indices, returns std::nullopt (offset is 0).
-static std::optional<Value> computeGEPOffset(LLVM::GEPOp op,
-                                             TranslationContext &ctx) {
-  auto &builder = ctx.getBuilder();
-  auto loc = op.getLoc();
+/// Compute the byte offset for a single-index GEP.
+/// Returns std::nullopt when the offset is zero or unsupported.
+static std::optional<Value> computeGEPByteOffset(LLVM::GEPOp op,
+                                                 TranslationContext &ctx) {
+  OpBuilder &builder = ctx.getBuilder();
+  Location loc = op.getLoc();
   auto indices = op.getIndices();
 
-  // Check if all indices are constant zero.
-  bool allZero = true;
-  for (auto idx : indices) {
-    if (auto val = idx.dyn_cast<Value>()) {
-      allZero = false;
-      break;
-    }
-    if (cast<IntegerAttr>(idx).getInt() != 0) {
-      allZero = false;
-      break;
-    }
-  }
-  if (allZero)
-    return std::nullopt;
-
-  // Single index -- the only case we handle (element type gives byte stride).
+  // Only handle single-index GEPs. Multi-index GEPs walk nested types
+  // and require full DataLayout support.
   if (indices.size() != 1)
     return std::nullopt;
+
+  int64_t elemBytes = getGEPElementBytes(op.getElemType());
+
   auto idx = indices[0];
-  if (auto val = idx.dyn_cast<Value>()) {
-    FailureOr<Value> resolved = resolve(val, ctx);
+  if (Value dynIdx = idx.dyn_cast<Value>()) {
+    FailureOr<Value> resolved = resolve(dynIdx, ctx);
     if (failed(resolved))
       return std::nullopt;
-    return *resolved;
+    if (elemBytes <= 1)
+      return *resolved;
+    // Scale by element size: offset = index * elemBytes.
+    ImmType scaleTy = ctx.createImmType(elemBytes);
+    Value scale = ConstantOp::create(builder, loc, scaleTy, elemBytes);
+    Type resTy = inferResultType({*resolved, scale}, ctx);
+    return ArithMulOp::create(builder, loc, resTy, *resolved, scale);
   }
-  int64_t constVal = cast<IntegerAttr>(idx).getInt();
-  auto immTy = ctx.createImmType(constVal);
-  return ConstantOp::create(builder, loc, immTy, constVal)->getResult(0);
+
+  int64_t constIdx = cast<IntegerAttr>(idx).getInt();
+  if (constIdx == 0)
+    return std::nullopt;
+  int64_t byteOffset = constIdx * std::max(elemBytes, int64_t{1});
+  ImmType immTy = ctx.createImmType(byteOffset);
+  return ConstantOp::create(builder, loc, immTy, byteOffset);
 }
 
 //===----------------------------------------------------------------------===//
@@ -571,10 +577,7 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   auto loc = op.getLoc();
   Value base = op.getBase();
 
-  auto baseTy = op.getBase().getType();
-  unsigned addrSpace = 0;
-  if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(baseTy))
-    addrSpace = ptrTy.getAddressSpace();
+  unsigned addrSpace = getLLVMAddrSpace(op.getBase());
 
   // LDS GEP (ptr<3>): compute byte offset for ds_read/ds_write.
   // DS instructions only accept a 32-bit vaddr, so truncate wide offsets.
@@ -582,10 +585,10 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
     FailureOr<Value> baseOff = resolve(base, ctx);
     if (failed(baseOff))
       return op->emitOpError("unmapped LDS GEP base");
-    auto vregTy = ctx.createVRegType();
+    VRegType vregTy = ctx.createVRegType();
     if (getRegSize(baseOff->getType()) > 1)
       *baseOff = ArithTruncOp::create(builder, loc, vregTy, *baseOff);
-    auto maybeOffset = computeGEPOffset(op, ctx);
+    std::optional<Value> maybeOffset = computeGEPByteOffset(op, ctx);
     if (!maybeOffset) {
       ctx.getMapper().mapValue(op.getResult(), *baseOff);
     } else {
@@ -605,9 +608,9 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   // make.buffer.rsrc. Propagate the mapper entry and accumulate the byte
   // offset so it can be folded into the SRD base later.
   if (addrSpace == 0) {
-    auto maybeOffset = computeGEPOffset(op, ctx);
+    std::optional<Value> maybeOffset = computeGEPByteOffset(op, ctx);
     // Forward mapper entry so make.buffer.rsrc can find the SRD.
-    if (auto mapped = ctx.getMapper().getMapped(base))
+    if (std::optional<Value> mapped = ctx.getMapper().getMapped(base))
       ctx.getMapper().mapValue(op.getResult(), *mapped);
 
     if (!maybeOffset) {
@@ -632,7 +635,7 @@ static LogicalResult handleGEP(LLVM::GEPOp op, LLVMTranslationState &st) {
   auto indices = op.getIndices();
   if (indices.size() != 1)
     return op->emitOpError("buffer GEP must have a single index");
-  auto idx = indices[0].dyn_cast<Value>();
+  Value idx = indices[0].template dyn_cast<Value>();
   if (!idx)
     return op->emitOpError("buffer GEP with constant index not yet supported");
 
@@ -876,7 +879,7 @@ static LogicalResult handleSDiv(LLVM::SDivOp op, LLVMTranslationState &st) {
     return op->emitOpError("unmapped operand in sdiv");
 
   // Power-of-2 constant divisor -> arithmetic shift right.
-  if (auto constVal = getConstantInt(op.getRhs())) {
+  if (auto constVal = getConstantIntValue(op.getRhs())) {
     int64_t divisor = *constVal;
     if (divisor > 0 && (divisor & (divisor - 1)) == 0) {
       int64_t shiftAmt = llvm::Log2_64(divisor);
@@ -902,7 +905,7 @@ static LogicalResult handleSRem(LLVM::SRemOp op, LLVMTranslationState &st) {
 
   // Power-of-2 constant divisor -> v_and_b32 with (divisor - 1).
   // Correct for non-negative dividends (thread IDs, indices).
-  if (auto constVal = getConstantInt(op.getRhs())) {
+  if (auto constVal = getConstantIntValue(op.getRhs())) {
     int64_t divisor = *constVal;
     if (divisor > 0 && (divisor & (divisor - 1)) == 0) {
       int64_t mask = divisor - 1;
