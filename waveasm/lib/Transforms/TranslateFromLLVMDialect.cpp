@@ -193,12 +193,16 @@ static Value truncToI32(Value v, Type llvmType, OpBuilder &builder,
 }
 
 /// Infer the pseudo-op result type from operand types.
-/// If any operand is VGPR -> VReg; otherwise SReg.
+/// Register file: VGPR if any operand is VGPR, else SGPR.
+/// Width: max operand width (in 32-bit dwords).
 static Type inferResultType(ValueRange operands, TranslationContext &ctx) {
+  int64_t width = 1;
+  for (Value v : operands)
+    width = std::max(width, getRegSize(v.getType()));
   for (Value v : operands)
     if (isVGPRType(v.getType()))
-      return ctx.createVRegType();
-  return ctx.createSRegType();
+      return ctx.createVRegType(width, width);
+  return ctx.createSRegType(width, width);
 }
 
 /// Try to extract a constant integer from an LLVM SSA value.
@@ -396,8 +400,9 @@ static LogicalResult handleWorkgroupId(OpTy op, LLVMTranslationState &st,
   return success();
 }
 
-// Emit arith pseudo-ops for i32/i64 casts -- legalization pass handles width.
 /// Translate an LLVM cast op to a WaveASM arithmetic pseudo-op.
+/// Width is derived from the LLVM result type so that sext i32->i64
+/// produces a 2-wide register and trunc i64->i32 produces a 1-wide one.
 template <typename LLVMOp, typename WaveASMOp>
 static LogicalResult handleCastOp(LLVMOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
@@ -405,8 +410,12 @@ static LogicalResult handleCastOp(LLVMOp op, LLVMTranslationState &st) {
   FailureOr<Value> src = resolve(op.getOperand(), ctx);
   if (failed(src))
     return op->emitOpError("unmapped operand in cast");
-  Type resTy = isVGPRType(src->getType()) ? (Type)ctx.createVRegType()
-                                          : (Type)ctx.createSRegType();
+  int64_t width = 1;
+  if (auto intTy = dyn_cast<IntegerType>(op.getResult().getType()))
+    width = (intTy.getWidth() + 31) / 32;
+  Type resTy = isVGPRType(src->getType())
+                   ? (Type)ctx.createVRegType(width, width)
+                   : (Type)ctx.createSRegType(width, width);
   Value pseudo = WaveASMOp::create(builder, op.getLoc(), resTy, *src);
   ctx.getMapper().mapValue(op.getResult(), pseudo);
   return success();
