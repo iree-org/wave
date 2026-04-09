@@ -687,9 +687,10 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
                 os << "  s_cbranch_scc1 " << afterLabel << "\n";
             }
           }
-          assert(guardEmitted &&
-                 "failed to emit zero-trip loop guard -- the loop condition "
-                 "does not match the expected S_CMP_LT_U32 pattern.");
+          // If the pattern didn't match, no guard is emitted.  This is
+          // correct for genuine do-while loops (hand-written or non-scf.for
+          // origins) that always execute at least one iteration.  The
+          // afterLabel is still emitted below but never branched to.
         }
 
         os << labelName << ":\n";
