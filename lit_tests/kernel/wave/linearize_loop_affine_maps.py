@@ -8,12 +8,11 @@ loop body should use hoisted ``arith.muli``/``arith.addi`` for GatherToLDS
 index computation rather than monolithic ``affine.apply`` ops with many
 operands.
 
-Reads whose flat index is truly affine in the IV (A-data GatherToLDS)
-get their stride annotated and codegen emits ``base + IV * stride``.
-Reads with complex preshuffle mappings that contain floor/Mod terms
-interacting with the IV (B-data, B-scale reads) may still use
-``affine.apply`` because the expression is not decomposable as
-``base + IV * stride`` in the symbolic domain.
+All reads whose flat index involves the loop IV -- A-data, B-data,
+A-scale, and B-scale -- get their stride annotated and codegen emits
+``base + IV * stride``.  A single residual ``affine.apply`` may remain
+for the bounds-check computation, but all data/scale index offsets are
+hoisted.
 
 Two wave shapes are tested to cover different workgroup tiling patterns:
   (1, 4):  64 threads, 1 wave in M, 4 in N -- block (256, 192, 256)
@@ -62,17 +61,13 @@ def test_hoisted_indices_in_loop_1x4():
     #              Inside the pipelined scf.for, GatherToLDS reads should use
     #              hoisted base + IV * stride (arith.muli + arith.addi), not
     #              monolithic affine.apply with 6+ operands.
-    #              B-data reads (complex preshuffle) may still use affine.apply
-    #              because the expression is not decomposable as base + IV * stride.
     # CHECK:       scf.for
     # CHECK:       arith.muli
     # CHECK:       arith.addi
     # CHECK:       gather_to_lds
-    #              KEY CHECK -- do not remove.  The affine.apply count and
-    #              CHECK-NOT verify that hoisting is working: only the
-    #              residual B-data/B-scale preshuffle reads (with floor/Mod
-    #              IV interaction) remain as affine.apply in the loop body.
-    # CHECK-COUNT-12: affine.apply
+    #              KEY CHECK -- do not remove.  After gather_to_lds there
+    #              must be NO affine.apply ops; all data/scale index offsets
+    #              (A-data, B-data, A-scale, B-scale) are fully hoisted.
     # CHECK-NOT:   affine.apply
     # CHECK:       scf.yield
 
@@ -88,10 +83,8 @@ def test_hoisted_indices_in_loop_2x2():
     # CHECK:       arith.muli
     # CHECK:       arith.addi
     # CHECK:       gather_to_lds
-    #              KEY CHECK -- do not remove.  The affine.apply count and
-    #              CHECK-NOT verify that hoisting is working: only the
-    #              residual B-data/B-scale preshuffle reads (with floor/Mod
-    #              IV interaction) remain as affine.apply in the loop body.
-    # CHECK-COUNT-28: affine.apply
+    #              KEY CHECK -- do not remove.  After gather_to_lds there
+    #              must be NO affine.apply ops; all data/scale index offsets
+    #              are fully hoisted.
     # CHECK-NOT:   affine.apply
     # CHECK:       scf.yield
