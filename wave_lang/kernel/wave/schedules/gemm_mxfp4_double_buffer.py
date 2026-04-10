@@ -827,8 +827,6 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
 
         # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
         # In case a second a second workgroup barrier is needed, another schedule is created to hide the latency of that second barrier, by scheduling safe ds_read ops before the second barrier (see get_mxfp4_dbuf_mixed_pingpong_schedule).
-        use_extra_barrier = False
-
         if block is not None and block == (256, 192, 256):
 
             cluster_0_ops = [
@@ -836,8 +834,6 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                 tkw.MemoryCounterWait(load=number_outstanding_loads_to_vgpr),
                 tkw.WorkgroupBarrier(),
             ]
-            if use_extra_barrier:
-                cluster_0_ops.append(tkw.WorkgroupBarrier())
             cluster_0_ops.extend(
                 [
                     loop_global_to_shared,
@@ -908,8 +904,6 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                 tkw.MemoryCounterWait(load=number_outstanding_loads_to_vgpr),
                 tkw.WorkgroupBarrier(),
             ]
-            if use_extra_barrier:
-                cluster_0_ops.append(tkw.WorkgroupBarrier())
             cluster_0_ops.extend(
                 [
                     loop_global_to_shared,
@@ -979,8 +973,6 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
                 tkw.MemoryCounterWait(load=0),
                 tkw.WorkgroupBarrier(),
             ]
-            if use_extra_barrier:
-                cluster_0_ops.append(tkw.WorkgroupBarrier())
             cluster_0_ops.extend(
                 [
                     loop_global_to_shared,
