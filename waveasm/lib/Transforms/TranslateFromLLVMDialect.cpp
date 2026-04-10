@@ -110,10 +110,7 @@ public:
   }
 
   LLVM::GlobalOp lookupGlobal(StringRef name) const {
-    auto it = globalsByName.find(name);
-    if (it != globalsByName.end())
-      return it->second;
-    return {};
+    return globalsByName.lookup(name);
   }
 
 private:
