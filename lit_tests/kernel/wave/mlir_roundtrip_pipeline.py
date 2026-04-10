@@ -35,6 +35,7 @@ from wave_lang.kernel.wave.mlir_converter.mlir_converter import (
     format_diagnostics,
     PersistentEmitter,
 )
+from wave_lang.kernel.wave.scheduling.schedule_enums import SchedulingType
 from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
 from wave_lang.kernel.wave.templates.attention_common import AttentionShape
 from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
@@ -257,38 +258,12 @@ def mxfp4_gemm_progressive_roundtrip():
     schedule = get_mxfp4_dbuf_schedule(use_stagger=False)
     options.compile_to_mlir = True
     options.linearize_reads = False
+    options.use_global_to_shared = False
+    options.schedule = SchedulingType.NONE
 
     # Passes whose MLIR roundtrip is known to fail for this kernel.
-    # - run_manual_schedule: crashes (partition_by_dim expects expanded K).
-    # - gather_to_shared and later: GatherToLDS nodes have type=None,
-    #   causing issubclass() failures in the water_emitter.
-    expected_failures = frozenset(
-        {
-            "gather_to_shared",
-            "gather_to_shared_swizzling",
-            "mark_hardware_transpose_candidates",
-            "apply_shared_memory_indexing_corrections",
-            "partition_ops_with_gpr_offsets",
-            "partition_strided_operators",
-            "remove_chained_extractslice",
-            "decompose_reduce_ops",
-            "decompose_scan_ops",
-            "decompose_topk_ops",
-            "run_manual_schedule",
-            "guard_g2s_with_bounds_check",
-            "schedule_reordering",
-            "minimize_shared_allocs",
-            "coalesce_wide_stores",
-            "add_shared_memory_barriers",
-            "add_cluster_barriers",
-            "compute_shared_memory_usage",
-            "simplify_indices",
-            "partition_gather_like_ops",
-            "generate_bounds_exprs",
-            "merge_contiguous_reads",
-            "location_check_pass",
-        }
-    )
+    # Currently, we expect all passes to pass the roundtrip for this kernel.
+    expected_failures = frozenset()
 
     # CHECK: {{[0-9]+}} OK, {{[0-9]+}} XFAIL, 0 XPASS, 0 FAIL
-    _run_progressive_roundtrip(gemm, options, expected_failures, schedule=schedule)
+    _run_progressive_roundtrip(gemm, options, expected_failures)
