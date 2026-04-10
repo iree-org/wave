@@ -14,6 +14,13 @@ import sys
 import math
 from typing import Any, Sequence
 
+from iree.compiler.dialects import (
+    _structured_transform_ops_gen as structured_transform_ops,
+)
+from iree.compiler.dialects.transform import (
+    any_op_t,
+)
+
 from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.support.detect_water import get_water_mlir_pkg_path, get_water_opt
 from wave_lang.support.detect_waveasm import get_waveasm_translate
@@ -21,17 +28,21 @@ from wave_lang.support.ir_imports import (
     Attribute,
     BlockArgument,
     FunctionType,
+    IrType,
     InsertionPoint,
     IntegerType,
+    Location,
     MemRefType,
     Module,
     Operation,
     TypeAttr,
+    UnitAttr,
     WalkResult,
     gpu_d,
     llvm_d,
     memref_d,
     stream_d,
+    transform_d,
 )
 
 
@@ -216,6 +227,41 @@ def make_linear_pass_pipeline(
     )
 
 
+_ALLOCA_TO_GLOBAL_ENTRYPOINT = "__transform_alloca_to_global"
+_TRANSFORM_MEMREF_ALLOCA_TYPE = '!transform.op<"memref.alloca">'
+
+
+def _module_asm_with_alloca_to_global_transform(module: Module) -> str:
+    """Return a cloned module with a named alloca-to-global transform attached."""
+
+    with module.context, Location.unknown():
+        transformed_module = Module.parse(
+            module.operation.get_asm(), context=module.context
+        )
+        transformed_module.operation.attributes["transform.with_named_sequence"] = (
+            UnitAttr.get()
+        )
+        with InsertionPoint(transformed_module.body):
+            named_sequence = transform_d.NamedSequenceOp(
+                _ALLOCA_TO_GLOBAL_ENTRYPOINT, [any_op_t()], []
+            )
+            with InsertionPoint(named_sequence.body):
+                target = named_sequence.body.arguments[0]
+                alloca_handle_type = IrType.parse(_TRANSFORM_MEMREF_ALLOCA_TYPE)
+                alloca = structured_transform_ops.structured_match(
+                    alloca_handle_type,
+                    target,
+                    ops=["memref.alloca"],
+                )
+                Operation.create(
+                    "transform.memref.alloca_to_global",
+                    results=[any_op_t(), any_op_t()],
+                    operands=[alloca],
+                )
+                transform_d.YieldOp([])
+        return transformed_module.operation.get_asm()
+
+
 def water_leak_in_bounds_check(module: Module, override_ir: str = ""):
     binary = get_water_opt()
     generic_mlir = _deiree(module) if override_ir == "" else override_ir
@@ -381,7 +427,7 @@ def water_waveasm_lowering_pipeline(
     Step 3 (water-opt): host runtime wrapping (gpu.binary -> runtime calls).
     """
     water_opt = get_water_opt()
-    mlir_asm = module.operation.get_asm()
+    mlir_asm = _module_asm_with_alloca_to_global_transform(module)
     target_chip = options.target
     lld_path = get_water_mlir_pkg_path() / "llvm" / "bin" / "ld.lld"
 
@@ -389,27 +435,6 @@ def water_waveasm_lowering_pipeline(
         if options.optimization_level:
             return [pipeline]
         return []
-
-    def add_transform(transform: str, entry_point: str) -> tuple[str, dict[str, Any]]:
-        nonlocal mlir_asm
-        # Erase the last '}' closing the module, append the transform, re-close.
-        last_close = mlir_asm.rfind("}")
-        if last_close != -1:
-            mlir_asm = mlir_asm[:last_close]
-        mlir_asm += transform
-        mlir_asm += "}\n"
-        return ("transform-interpreter", {"entry-point": entry_point})
-
-    alloca_to_global = """
-  transform.named_sequence @__transform_alloca_to_global(%arg0: !transform.any_op {transform.readonly}) {
-    %alloca = transform.structured.match ops{["memref.alloca"]} in %arg0
-        : (!transform.any_op) -> !transform.op<"memref.alloca">
-    %get_global, %global = transform.memref.alloca_to_global %alloca
-          : (!transform.op<"memref.alloca">)
-            -> (!transform.any_op, !transform.any_op)
-    transform.yield
-  }
-"""
 
     canonicalize_cse = "composite-fixed-point-pass", {
         "name": "canonicalize_cse",
@@ -431,7 +456,7 @@ def water_waveasm_lowering_pipeline(
         *add_opt(int_range_optimizations),
         *add_opt("loop-invariant-code-motion"),
         ("water-alloc-to-alloca", {}, "gpu.module"),
-        add_transform(alloca_to_global, "__transform_alloca_to_global"),
+        ("transform-interpreter", {"entry-point": _ALLOCA_TO_GLOBAL_ENTRYPOINT}),
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         (
             "convert-gpu-to-rocdl",
@@ -479,6 +504,7 @@ def water_waveasm_lowering_pipeline(
     waveasm_translate = get_waveasm_translate()
     waveasm_args = [
         waveasm_translate,
+        "--waveasm-llvm-sdiv-srem-legalization",
         f"--waveasm-translate-from-llvm=target={target_chip}",
         "--waveasm-arith-legalization",
         "--waveasm-scoped-cse",
@@ -520,7 +546,7 @@ def water_waveasm_lowering_pipeline(
 
 def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Module:
     binary = get_water_opt()
-    mlir_asm = module.operation.get_asm()
+    mlir_asm = _module_asm_with_alloca_to_global_transform(module)
     target_chip = options.target
 
     def add_opt(pipeline):
@@ -528,38 +554,6 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
             return [pipeline]
 
         return []
-
-    def add_transform(transform: str, entry_point: str) -> tuple[str, dict[str, Any]]:
-        nonlocal mlir_asm
-        # Erase the last occurrence of '}' from mlir_asm which closes the module operation
-        last_close = mlir_asm.rfind("}")
-        if last_close != -1:
-            mlir_asm = mlir_asm[:last_close]
-        mlir_asm += transform
-        mlir_asm += "}\n"
-        return ("transform-interpreter", {"entry-point": entry_point})
-
-    # TODO: this transform refuses to work.
-    alloc_to_alloca = """
-  transform.named_sequence @__transform_alloc_to_alloca(%arg0: !transform.any_op {transform.readonly}) {
-    %0 = transform.structured.match ops{["gpu.func"]} in %arg0 : (!transform.any_op) -> !transform.any_op
-    transform.apply_patterns to %0 {
-      transform.apply_patterns.memref.alloc_to_alloca
-    } : !transform.any_op
-    transform.yield
-  }
-"""
-
-    alloca_to_global = """
-  transform.named_sequence @__transform_alloca_to_global(%arg0: !transform.any_op {transform.readonly}) {
-    %alloca = transform.structured.match ops{["memref.alloca"]} in %arg0
-        : (!transform.any_op) -> !transform.op<"memref.alloca">
-    %get_global, %global = transform.memref.alloca_to_global %alloca
-          : (!transform.op<"memref.alloca">)
-            -> (!transform.any_op, !transform.any_op)
-    transform.yield
-  }
-"""
 
     canonicalize_cse = "composite-fixed-point-pass", {
         "name": "canonicalize_cse",
@@ -582,8 +576,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         *add_opt(int_range_optimizations),
         *add_opt("loop-invariant-code-motion"),
         ("water-alloc-to-alloca", {}, "gpu.module"),
-        # add_transform(alloc_to_alloca, "__transform_alloc_to_alloca"),
-        add_transform(alloca_to_global, "__transform_alloca_to_global"),
+        ("transform-interpreter", {"entry-point": _ALLOCA_TO_GLOBAL_ENTRYPOINT}),
         "convert-scf-to-cf",
         ("convert-amdgpu-to-rocdl", {"chipset": target_chip}),
         ("convert-gpu-to-rocdl", {"use-bare-ptr-memref-call-conv": "1"}, "gpu.module"),

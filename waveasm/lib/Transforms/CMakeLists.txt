@@ -24,6 +24,7 @@ add_mlir_dialect_library(MLIRWaveASMTransforms
   LinearScanRegAlloc.cpp
   LiteralMaterialization.cpp
   Liveness.cpp
+  LLVMSDivSRemLegalization.cpp
   LoopAddressPromotion.cpp
   M0RedundancyElimination.cpp
   MemoryOffsetOptimization.cpp

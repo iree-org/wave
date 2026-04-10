@@ -1,18 +1,14 @@
-// RUN: waveasm-translate %s --waveasm-llvm-sdiv-srem-legalization --waveasm-translate-from-llvm | FileCheck %s
-// Verify sdiv and srem with positive power-of-2 constants.
-// Negative dividends require bias/correction so we should see compare/select
-// scaffolding in addition to the final shift/mask-shaped arithmetic.
+// RUN: waveasm-translate %s --waveasm-llvm-sdiv-srem-legalization | FileCheck %s
+// Verify that the LLVM pre-pass rewrites signed div/rem by positive power-of-2
+// constants before LLVM->WaveASM translation.
 
-// CHECK: waveasm.program @test__waveasm
-// sdiv lowers through signed-bias correction before the arithmetic shift.
-// CHECK: waveasm.arith.cmp slt
-// CHECK: waveasm.arith.select
-// CHECK: waveasm.v_ashrrev_i32
-// srem keeps LLVM sign semantics via mask + conditional correction.
-// CHECK: waveasm.arith.and
-// CHECK: waveasm.arith.add
-// CHECK: waveasm.arith.select
-// CHECK: waveasm.s_endpgm
+// CHECK-LABEL: llvm.func @test
+// CHECK: llvm.icmp "slt"
+// CHECK: llvm.select
+// CHECK: llvm.ashr
+// CHECK: llvm.and
+// CHECK: llvm.icmp "ne"
+// CHECK: llvm.select
 
 gpu.module @gpu_module {
   llvm.mlir.global private @scratch() {addr_space = 3 : i32} : i32

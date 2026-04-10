@@ -373,6 +373,22 @@ def WAVEASMArithLegalization : Pass<"waveasm-arith-legalization"> {
   let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
+def WAVEASMLLVMSDivSRemLegalization
+    : Pass<"waveasm-llvm-sdiv-srem-legalization"> {
+  let summary = "Rewrite LLVM signed div/rem by positive power-of-two constants";
+  let description = [{
+    Rewrites `llvm.sdiv` and `llvm.srem` on i32 values with positive
+    power-of-two constant divisors into equivalent LLVM dialect compare/select/
+    add/and/ashr sequences.
+
+    This keeps the strength reduction in LLVM dialect, before LLVM->WaveASM
+    translation changes the abstraction level, and makes the rewrite
+    independently testable.
+  }];
+
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+}
+
 def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm"> {
   let summary = "Translate LLVM dialect kernels to WaveASM IR";
   let description = [{
