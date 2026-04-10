@@ -1086,31 +1086,16 @@ def testScaledGemmMXFP4PreshuffleBWideStores(
 
 
 MACROTILES_PRESHUFFLE_8WAVE_PINGPONG = [
-    (256, 160, 256),
-    (256, 224, 256),
-    (128, 128, 256),
-    (128, 256, 256),
-    (256, 32, 256),
-    (64, 192, 256),
-    (64, 128, 256),
+    ((1024, 1920, 8192), (256, 192, 256)),
+    ((1024, 1024, 8192), (256, 256, 256)),
+    ((1024, 1600, 8192), (256, 160, 256)),
+    ((1024, 1024, 8192), (64, 64, 256)),
 ]
-
-
-_DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS = {
-    (128, 128, 256),
-    (128, 256, 256),
-    (64, 192, 256),
-    (64, 128, 256),
-}
 
 
 @require_e2e
 @require_cdna4
-@pytest.mark.parametrize(
-    "shape",
-    [(1024, 1024, 8192)],
-)
-@pytest.mark.parametrize("block_shape", MACROTILES_PRESHUFFLE_8WAVE_PINGPONG)
+@pytest.mark.parametrize("shape,block_shape", MACROTILES_PRESHUFFLE_8WAVE_PINGPONG)
 @pytest.mark.parametrize(
     "mfma_variant",
     [ScaledMMAType.F32_16x16x128_F8F6F4],
@@ -1124,11 +1109,7 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScales(
 ):
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule and scale preshuffling.
     (A&B scales preshuffled, A and B global-to-LDS).
-    Note: In dynamic mode, this test only covers selected block shapes to avoid exceeding LDS memory limits.
     """
-    if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
-        pytest.skip("Dynamic mode is only covered for selected block shapes.")
-
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales(
         shape,
         block_shape,
@@ -1138,6 +1119,8 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScales(
     options.specialize = True
     options.use_buffer_ops = True
     options.minimize_shared_allocs = True
+    options.wave_runtime = True
+
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
@@ -1161,11 +1144,7 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScales(
 
 @require_e2e
 @require_cdna4
-@pytest.mark.parametrize(
-    "shape",
-    [(1024, 1024, 8192)],
-)
-@pytest.mark.parametrize("block_shape", MACROTILES_PRESHUFFLE_8WAVE_PINGPONG)
+@pytest.mark.parametrize("shape,block_shape", MACROTILES_PRESHUFFLE_8WAVE_PINGPONG)
 @pytest.mark.parametrize(
     "mfma_variant",
     [ScaledMMAType.F32_16x16x128_F8F6F4],
@@ -1188,8 +1167,10 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndB(
     )
     options.specialize = True
     options.use_buffer_ops = True
-    options.minimize_shared_allocs = True
+    options.minimize_shared_allocs = False
     options.linearize_shared_access = True
+    options.wave_runtime = True
+
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
@@ -1214,11 +1195,7 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndB(
 
 @require_e2e
 @require_cdna4
-@pytest.mark.parametrize(
-    "shape",
-    [(1024, 1024, 8192)],
-)
-@pytest.mark.parametrize("block_shape", MACROTILES_PRESHUFFLE_8WAVE_PINGPONG)
+@pytest.mark.parametrize("shape,block_shape", MACROTILES_PRESHUFFLE_8WAVE_PINGPONG)
 @pytest.mark.parametrize(
     "mfma_variant",
     [ScaledMMAType.F32_16x16x128_F8F6F4],
@@ -1233,8 +1210,6 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndBLDS(
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule, scale and B preshuffling.
     B is prefteched through LDS.
     """
-    if dynamic and block_shape not in _DYNAMIC_ALLOWED_PRESHUFFLE_8WAVE_BLOCKS:
-        pytest.skip("Dynamic mode is only covered for selected block shapes.")
 
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         shape,
@@ -1247,6 +1222,7 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndBLDS(
     options.use_buffer_ops = True
     options.minimize_shared_allocs = False
     options.linearize_shared_access = True
+    options.wave_runtime = True
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
@@ -1255,6 +1231,17 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndBLDS(
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         use_stagger=True, shape=shape
     )
+    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
+    options.subs[UNROLL_FACTOR] = 2
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
