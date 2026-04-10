@@ -635,15 +635,10 @@ def test_wmma_with_tensor_load():
     ### make DMA base
     # CHECK:        %[[DMA_BASE0:.+]] = amdgpu.make_dma_base {{.*}}, %[[VIEW1]][{{.*}}]
 
-    # Cluster mask generation
-    # CHECK:        %[[COND0:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
-    # CHECK:        %[[COND1:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
-    # CHECK:        %[[COND2:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
-    # CHECK:        %[[COND3:.*]] = arith.cmpi eq, %{{.*}}, %{{.*}} : index
-    # CHECK:        %[[MASK1:.*]] = arith.select %[[COND3]], %{{.*}}, %[[C0]] : index
-    # CHECK:        %[[MASK2:.*]] = arith.select %[[COND2]], %{{.*}}, %[[MASK1]] : index
-    # CHECK:        %[[MASK3:.*]] = arith.select %[[COND1]], %{{.*}}, %[[MASK2]] : index
-    # CHECK:        %[[MASK4:.*]] = arith.select %[[COND0]], %{{.*}}, %[[MASK3]] : index
+    # Cluster mask generation -- ixsimpl flattens the Piecewise into
+    # individual selects per condition rather than a cascaded chain.
+    # CHECK:        arith.cmpi eq, %{{.*}}, %{{.*}} : index
+    # CHECK:        arith.select %{{.*}}, %{{.*}}, %{{.*}} : index
 
     # CHECK:        %[[TENSOR_DESC_0:.*]] = amdgpu.make_dma_descriptor %[[DMA_BASE0:.+]] globalSize [%{{.*}}, %{{.*}}] globalStride [32, 1] sharedSize [%{{.*}}, %{{.*}}] padShared({{.*}}) workgroupMask %{{.*}}
 
