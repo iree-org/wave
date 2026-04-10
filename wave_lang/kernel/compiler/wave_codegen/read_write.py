@@ -790,16 +790,13 @@ def _create_vec_read_write(
     else:
         strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
 
-    # With the waveasm backend (non-water path), allow masked loads even
-    # with buffer ops.  The mask computation may fail to translate
-    # (vector<Nxindex> ops are unsupported), but the backend loads
-    # unconditionally in that case, relying on hardware OOB checking
-    # (SRD boundsCheck) to return zero.  The water+waveasm path goes
-    # through TranslateFromLLVMDialect which lacks vector op support,
-    # so masked loads must stay disabled there.
-    no_masked_load_store_ops = buffer_ops_enabled and (
-        emitter.options.backend != "asm" or emitter.options.use_water_backend
-    )
+    # With buffer ops and the asm backend, allow masked loads: the lowering
+    # can rely on hardware OOB (SRD validBytes / num_records) where
+    # applicable instead of forcing the no-mask path.
+    if buffer_ops_enabled and getattr(emitter.options, "backend", "llvm") == "asm":
+        no_masked_load_store_ops = False
+    else:
+        no_masked_load_store_ops = buffer_ops_enabled
 
     mask_splat = _get_splat_input(mask)
     splatted_mask = mask_splat is not None
@@ -1712,18 +1709,26 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             ),
         )
 
-        mask = _build_mask(
-            emitter,
-            src_idx,
-            elements_per_thread=1,
-            bounds=src_bounds,
-            dynamic_values=src_dynamic_vals_map_start,
-        )
-        if mask:
-            mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
-            oob_index_value = _get_out_of_bounds_index(element_type)
-            oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-            src_offset = arith_d.select(mask, src_offset, oob_index)
+        # When the SRD validBytes encodes the real buffer size (via
+        # _compute_branchless_valid_bytes with dynamic shape), hardware
+        # num_records clamping returns 0 for OOB addresses.  Skip the
+        # per-load software mask to eliminate ~4 VALU instructions and
+        # temporary VGPRs per gather_to_lds call.
+        if valid_bytes_override is None:
+            mask = _build_mask(
+                emitter,
+                src_idx,
+                elements_per_thread=1,
+                bounds=src_bounds,
+                dynamic_values=src_dynamic_vals_map_start,
+            )
+            if mask:
+                mask = vector_d.extract(
+                    mask, static_position=[0], dynamic_position=[]
+                )
+                oob_index_value = _get_out_of_bounds_index(element_type)
+                oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+                src_offset = arith_d.select(mask, src_offset, oob_index)
 
         amdgpu_d.gather_to_lds(
             src=lin_src,
@@ -1795,18 +1800,24 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         ),
     )
 
-    mask = _build_mask(
-        emitter,
-        src_idx,
-        elements_per_thread=1,
-        bounds=src_bounds,
-        dynamic_values=src_dynamic_vals_map_start,
-    )
-    if mask:
-        mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
-        oob_index_value = _get_out_of_bounds_index(element_type)
-        oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-        src_offset = arith_d.select(mask, src_offset, oob_index)
+    # When the SRD validBytes encodes the real buffer size (via
+    # _compute_branchless_valid_bytes with dynamic shape), hardware
+    # num_records clamping returns 0 for OOB addresses.  Skip the
+    # per-load software mask to eliminate ~4 VALU instructions and
+    # temporary VGPRs per gather_to_lds call.
+    if valid_bytes_override is None:
+        mask = _build_mask(
+            emitter,
+            src_idx,
+            elements_per_thread=1,
+            bounds=src_bounds,
+            dynamic_values=src_dynamic_vals_map_start,
+        )
+        if mask:
+            mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
+            oob_index_value = _get_out_of_bounds_index(element_type)
+            oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+            src_offset = arith_d.select(mask, src_offset, oob_index)
 
     amdgpu_d.gather_to_lds(
         src=lin_src,
