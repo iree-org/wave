@@ -549,6 +549,8 @@ static LogicalResult legalizeBitwiseOp(ArithOp op, OpBuilder &builder) {
       auto vregTy = VRegType::get(builder.getContext(), 2);
       result = VALUOp64::create(builder, loc, vregTy, lhs, rhs);
     } else {
+      if (isa<ImmType>(lhs.getType()) && isSGPRType(rhs.getType()))
+        std::swap(lhs, rhs);
       auto sregTy = SRegType::get(builder.getContext(), 2, 2);
       auto sccTy = SCCType::get(builder.getContext());
       result = SALUOp64::create(builder, loc, sregTy, sccTy, lhs, rhs).getDst();
@@ -559,6 +561,8 @@ static LogicalResult legalizeBitwiseOp(ArithOp op, OpBuilder &builder) {
       auto vregTy = VRegType::get(builder.getContext());
       result = VALUOp32::create(builder, loc, vregTy, lhs, rhs);
     } else {
+      if (isa<ImmType>(lhs.getType()) && isSGPRType(rhs.getType()))
+        std::swap(lhs, rhs);
       auto sregTy = SRegType::get(builder.getContext(), 1, 1);
       auto sccTy = SCCType::get(builder.getContext());
       result = SALUOp32::create(builder, loc, sregTy, sccTy, lhs, rhs).getDst();

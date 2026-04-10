@@ -31,6 +31,7 @@ def get_wave_compile_options(
     canonicalize: bool = False,
     dynamic_symbols=[],
     additional_symbols={},
+    wave_runtime: bool = False,
     location_capture_config=LocationCaptureConfig(
         level=LocationCaptureLevel.FILE_LINE_COL
     ),
@@ -61,6 +62,7 @@ def get_wave_compile_options(
         location_capture_config=location_capture_config,
         drop_debug_info_before_mlir=drop_debug_info_before_mlir,
         use_water_backend=True,
+        wave_runtime=wave_runtime,
     )
 
 
@@ -226,4 +228,53 @@ def test_cluster_dims():
     # CHECK-SAME:         clusters in (%[[C2]], %[[C2]], %[[C1]])
     # CHECK-SAME:         blocks in (%[[C1]], %[[C1]], %[[C1]])
     # CHECK-SAME:         threads in (%[[C64]], %[[C1]], %[[C1]])
+    # CHECK:            return
+
+
+@run_test
+def test_dynamic_strides_output_placeholder_first():
+    constraints = get_constraints()
+
+    @tkw.wave(constraints)
+    def output_then_input(
+        out: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+        inp: tkl.Memory[M, N, ADDRESS_SPACE, tkl.f16],
+    ):
+        res = tkw.read(inp)
+        tkw.write(res, out)
+
+    output_then_input = wave_compile(
+        get_wave_compile_options(
+            canonicalize=True,
+            wave_runtime=True,
+            drop_debug_info_before_mlir=True,
+        ),
+        output_then_input,
+    )
+    print(output_then_input.asm)
+
+    # Even though the Python placeholder order is (out, inp), kernel ABI order
+    # is linearized to input first, output second.
+    # CHECK-LABEL:    test_dynamic_strides_output_placeholder_first
+    # CHECK:          gpu.func @output_then_input
+    # CHECK-SAME:       (%[[IN:.*]]: memref<f16> {llvm.inreg}, %[[OUT:.*]]: memref<f16> {llvm.inreg}, %[[IN_STRIDE:.*]]: index {llvm.inreg}, %[[OUT_STRIDE:.*]]: index {llvm.inreg})
+    # CHECK:            %[[IN_VIEW:.*]] = memref.reinterpret_cast %[[IN]] to offset: [0], sizes: [16, 16], strides: [%[[IN_STRIDE]], 1]
+    # CHECK:            %[[OUT_VIEW:.*]] = memref.reinterpret_cast %[[OUT]] to offset: [0], sizes: [16, 16], strides: [%[[OUT_STRIDE]], 1]
+
+    # Host wrapper must mirror that same ABI order for both buffers and strides.
+    # CHECK-LABEL:    func.func @isolated_benchmark
+    # CHECK-SAME:       (%[[STREAM:.*]]: !llvm.ptr, %[[OUT_ARG:.*]]: !llvm.ptr, %[[IN_ARG:.*]]: !llvm.ptr)
+    # CHECK-DAG:        %[[C0:.*]] = arith.constant 0 : index
+    # CHECK-DAG:        %[[C1:.*]] = arith.constant 1 : index
+    # CHECK-DAG:        %[[C64:.*]] = arith.constant 64 : index
+    # CHECK-DAG:        %[[C0_I32:.*]] = arith.constant 0 : i32
+    # CHECK:            %[[IN_BUF:.*]] = call @wave_get_buffer(%[[IN_ARG]]) : (!llvm.ptr) -> memref<?xi8>
+    # CHECK:            %[[IN_VIEW0:.*]] = memref.view %[[IN_BUF]][%[[C0]]][] : memref<?xi8> to memref<f16>
+    # CHECK:            %[[OUT_BUF:.*]] = call @wave_get_buffer(%[[OUT_ARG]]) : (!llvm.ptr) -> memref<?xi8>
+    # CHECK:            %[[OUT_VIEW0:.*]] = memref.view %[[OUT_BUF]][%[[C0]]][] : memref<?xi8> to memref<f16>
+    # CHECK:            %[[IN_STRIDE_I64:.*]] = call @wave_get_stride(%[[IN_ARG]], %[[C0_I32]]) : (!llvm.ptr, i32) -> i64
+    # CHECK:            %[[IN_STRIDE_IDX:.*]] = arith.index_cast %[[IN_STRIDE_I64]] : i64 to index
+    # CHECK:            %[[OUT_STRIDE_I64:.*]] = call @wave_get_stride(%[[OUT_ARG]], %[[C0_I32]]) : (!llvm.ptr, i32) -> i64
+    # CHECK:            %[[OUT_STRIDE_IDX:.*]] = arith.index_cast %[[OUT_STRIDE_I64]] : i64 to index
+    # CHECK:            gpu.launch_func @gpu_module::@output_then_input blocks in (%[[C1]], %[[C1]], %[[C1]]) threads in (%[[C64]], %[[C1]], %[[C1]]) args(%[[IN_VIEW0]] : memref<f16>, %[[OUT_VIEW0]] : memref<f16>, %[[IN_STRIDE_IDX]] : index, %[[OUT_STRIDE_IDX]] : index)
     # CHECK:            return

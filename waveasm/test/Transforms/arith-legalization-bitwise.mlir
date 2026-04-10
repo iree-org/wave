@@ -14,6 +14,7 @@ waveasm.program @test_or_i32
   %v0 = waveasm.precolored.vreg 0 : !waveasm.vreg
   %s0 = waveasm.precolored.sreg 0 : !waveasm.sreg
   %s1 = waveasm.precolored.sreg 1 : !waveasm.sreg
+  %c1 = waveasm.constant 1 : !waveasm.imm<1>
   %c42 = waveasm.constant 42 : !waveasm.imm<42>
 
   // VGPR | VGPR -> v_or_b32.
@@ -33,6 +34,10 @@ waveasm.program @test_or_i32
   // CHECK: waveasm.s_or_b32 %{{.*}}, %{{.*}} : !waveasm.sreg, !waveasm.imm<42>
   %or_si = waveasm.arith.or %s0, %c42 : (!waveasm.sreg, !waveasm.imm<42>) -> !waveasm.sreg
 
+  // imm | SGPR -> s_or_b32 with the SGPR normalized to operand 0.
+  // CHECK: waveasm.s_or_b32 %{{.*}}, %{{.*}} : !waveasm.sreg, !waveasm.imm<1>
+  %or_is = waveasm.arith.or %c1, %s0 : (!waveasm.imm<1>, !waveasm.sreg) -> !waveasm.sreg
+
   // CHECK-NOT: waveasm.arith.
   waveasm.s_endpgm
 }
@@ -50,6 +55,7 @@ waveasm.program @test_and_i32
   %v0 = waveasm.precolored.vreg 0 : !waveasm.vreg
   %s0 = waveasm.precolored.sreg 0 : !waveasm.sreg
   %s1 = waveasm.precolored.sreg 1 : !waveasm.sreg
+  %c1 = waveasm.constant 1 : !waveasm.imm<1>
 
   // VGPR & VGPR -> v_and_b32.
   // CHECK: waveasm.v_and_b32 %{{.*}}, %{{.*}} : !waveasm.vreg, !waveasm.vreg
@@ -63,6 +69,10 @@ waveasm.program @test_and_i32
   // CHECK: waveasm.v_mov_b32
   // CHECK: waveasm.v_and_b32
   %and_sv = waveasm.arith.and %s0, %v0 : (!waveasm.sreg, !waveasm.vreg) -> !waveasm.vreg
+
+  // imm & SGPR -> s_and_b32 with the SGPR normalized to operand 0.
+  // CHECK: waveasm.s_and_b32 %{{.*}}, %{{.*}} : !waveasm.sreg, !waveasm.imm<1>
+  %and_is = waveasm.arith.and %c1, %s0 : (!waveasm.imm<1>, !waveasm.sreg) -> !waveasm.sreg
 
   // CHECK-NOT: waveasm.arith.
   waveasm.s_endpgm
