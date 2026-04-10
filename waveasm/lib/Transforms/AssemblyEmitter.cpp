@@ -996,8 +996,31 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             invalidateScratchCache();
             return "  v_mov_b32 " + scratch0 + ", " + src + "\n" +
                    "  v_mov_b32 " + scratch1 + ", " + src + "\n" +
-                   "  v_permlane16_swap_b32 " + dst + ", " + scratch1 + "\n" +
-                   "  v_mov_b32 " + src + ", " + scratch0;
+                   "  s_nop 1\n" + "  v_permlane16_swap_b32 " + dst + ", " +
+                   scratch1 + "\n" + "  v_mov_b32 " + src + ", " + scratch0;
+          })
+
+      // V_PERMLANE16_SWAP_B32_PAIR: dual-output swap for paired wide stores.
+      // Copies both inputs to scratch VGPRs, executes the swap on the
+      // scratches, then copies both results to the allocated output registers.
+      .Case<V_PERMLANE16_SWAP_B32_PAIR>(
+          [&](V_PERMLANE16_SWAP_B32_PAIR pairOp) -> std::optional<std::string> {
+            std::string newDst = resolveValue(pairOp.getNewDst());
+            std::string newSrc = resolveValue(pairOp.getNewSrc());
+            std::string oldDst = resolveValue(pairOp.getOldDst());
+            std::string src = resolveValue(pairOp.getSrc());
+
+            // Always use scratch VGPRs: the in-place swap clobbers the input
+            // registers, but downstream selects still need the originals.
+            std::string s0 = formatVGPRRange(kScratchVGPR, 1);
+            std::string s1 = formatVGPRRange(kScratchVGPR + 1, 1);
+            peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 2);
+            invalidateScratchCache();
+            return "  v_mov_b32 " + s0 + ", " + oldDst + "\n" + "  v_mov_b32 " +
+                   s1 + ", " + src + "\n" + "  s_nop 1\n" +
+                   "  v_permlane16_swap_b32 " + s0 + ", " + s1 + "\n" +
+                   "  v_mov_b32 " + newDst + ", " + s0 + "\n" + "  v_mov_b32 " +
+                   newSrc + ", " + s1;
           })
 
       // V_ACCVGPR_READ_B32: unroll multi-register reads into scalar ops

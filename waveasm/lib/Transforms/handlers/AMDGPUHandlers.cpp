@@ -1300,23 +1300,56 @@ LogicalResult handlePermlane16Swap(Operation *op, TranslationContext &ctx) {
     return op->emitError("permlane16_swap source not mapped");
   }
 
+  // Check whether downstream code extracts element [1] (partner's old_dst).
+  // If so, we need the dual-output pair op to properly model both hardware
+  // outputs in SSA.  Otherwise, the single-output op with the mapValue
+  // workaround suffices (and avoids extra scratch register traffic).
+  bool needsBothElements = false;
+  for (auto user : swapOp.getRes().getUsers()) {
+    if (auto ev = dyn_cast<LLVM::ExtractValueOp>(user)) {
+      if (!ev.getPosition().empty() && ev.getPosition()[0] == 1) {
+        needsBothElements = true;
+        break;
+      }
+    }
+  }
+
+  if (needsBothElements) {
+    // --- Dual-output pair path ---
+    // Both old_dst and src are explicit inputs; both new_dst and new_src
+    // are explicit outputs.  The assembly emitter uses scratch VGPRs to
+    // execute the swap without clobbering either input.
+    auto oldDst = ctx.getMapper().getMapped(swapOp.getOld());
+    if (!oldDst) {
+      return op->emitError("permlane16_swap old_dst not mapped");
+    }
+
+    Value oldDstVal = ensureVGPR(*oldDst, ctx, builder, loc);
+    Value srcVal = ensureVGPR(*src, ctx, builder, loc);
+
+    auto dstType = ctx.createVRegType();
+    auto srcType = ctx.createVRegType();
+    auto pairOp = V_PERMLANE16_SWAP_B32_PAIR::create(
+        builder, loc, dstType, srcType, oldDstVal, srcVal);
+    Value newDst = pairOp.getNewDst();
+    Value newSrc = pairOp.getNewSrc();
+
+    ctx.getMapper().mapValue(swapOp.getRes(), newDst);
+    ctx.getMapper().setExtraMapping(swapOp.getRes(), 0, newDst);
+    ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, newSrc);
+
+    return success();
+  }
+
+  // --- Single-output path (original handler) ---
   Value srcVal = ensureVGPR(*src, ctx, builder, loc);
 
-  // Preserve the original source before the swap clobbers it.
-  // v_permlane16_swap_b32 overwrites BOTH dst and src, so downstream
-  // uses of the original value (element[1]) must read from a copy.
   Value srcCopy = V_MOV_B32::create(builder, loc, ctx.createVRegType(), srcVal);
   auto dstType = ctx.createVRegType();
   Value swapped = V_PERMLANE16_SWAP_B32::create(builder, loc, dstType, srcVal);
 
-  // Remap the original MLIR source so any future lookups (e.g. arith.select
-  // that directly references own_lo/own_hi) resolve to the preserved copy
-  // instead of the clobbered register.
   ctx.getMapper().mapValue(swapOp.getSrc(), srcCopy);
 
-  // The MLIR result is !llvm.struct<(i32, i32)>.
-  // Element [0] = swapped value (from partner lane).
-  // Element [1] = original value (preserved in srcCopy).
   ctx.getMapper().mapValue(swapOp.getRes(), swapped);
   ctx.getMapper().setExtraMapping(swapOp.getRes(), 0, swapped);
   ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, srcCopy);

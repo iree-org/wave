@@ -293,8 +293,8 @@ static bool overlaps(const PhysVGPRRange &a, const PhysVGPRRange &b) {
 }
 
 static llvm::DenseMap<int64_t, int64_t>
-computeCompaction(llvm::SmallVectorImpl<PhysVGPRRange> &ranges,
-                  int64_t maxRegs) {
+computeCompaction(llvm::SmallVectorImpl<PhysVGPRRange> &ranges, int64_t maxRegs,
+                  int64_t scratchCount) {
   llvm::SmallVector<int64_t> order(ranges.size());
   std::iota(order.begin(), order.end(), 0);
   llvm::sort(order, [&](int64_t a, int64_t b) {
@@ -324,8 +324,9 @@ computeCompaction(llvm::SmallVectorImpl<PhysVGPRRange> &ranges,
     int64_t align = r.alignment;
 
     occupied.reset();
-    if (kScratchVGPR < maxRegs)
-      occupied.set(kScratchVGPR);
+    for (int64_t s = 0; s < scratchCount; ++s)
+      if (kScratchVGPR + s < maxRegs)
+        occupied.set(kScratchVGPR + s);
     for (size_t j = 0; j < ranges.size(); ++j) {
       if (newAssignment[j] < 0)
         continue;
@@ -523,7 +524,12 @@ struct WAVEASMVGPRCompaction
       // tighter than a hardcoded 512 and adapts to the actual allocation.
       int64_t maxRegs = maxBefore;
 
-      auto oldToNew = computeCompaction(ranges, maxRegs);
+      // Only reserve the second scratch VGPR when the kernel uses PAIR ops.
+      bool hasPairOps = false;
+      program->walk([&](V_PERMLANE16_SWAP_B32_PAIR) { hasPairOps = true; });
+      int64_t scratchCount = hasPairOps ? 2 : 1;
+
+      auto oldToNew = computeCompaction(ranges, maxRegs, scratchCount);
 
       int64_t maxAfter = 0;
       for (const auto &r : ranges) {

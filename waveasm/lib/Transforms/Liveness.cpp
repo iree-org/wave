@@ -480,7 +480,7 @@ LivenessInfo computeLiveness(ProgramOp program) {
   // Check for permlane swap ops — used by passes 2c and 3a1.
   bool hasPermlaneSwaps = false;
   for (auto *op : ops) {
-    if (isa<V_PERMLANE16_SWAP_B32>(op)) {
+    if (isa<V_PERMLANE16_SWAP_B32, V_PERMLANE16_SWAP_B32_PAIR>(op)) {
       hasPermlaneSwaps = true;
       break;
     }
@@ -502,6 +502,28 @@ LivenessInfo computeLiveness(ProgramOp program) {
         if (srcIt != info.ranges.end() && dstIt != info.ranges.end()) {
           srcIt->second.end = std::max(srcIt->second.end, dstIt->second.end);
         }
+      }
+      // Extend pair op inputs to cover the lifetime of both outputs.
+      // The assembly emitter reads both inputs at the swap point, so they
+      // must remain live until both outputs have been consumed.
+      if (auto pairOp = dyn_cast<V_PERMLANE16_SWAP_B32_PAIR>(op)) {
+        Value oldDst = pairOp.getOldDst();
+        Value src = pairOp.getSrc();
+        Value newDst = pairOp.getNewDst();
+        Value newSrc = pairOp.getNewSrc();
+        int64_t maxEnd = 0;
+        auto newDstIt = info.ranges.find(newDst);
+        auto newSrcIt = info.ranges.find(newSrc);
+        if (newDstIt != info.ranges.end())
+          maxEnd = std::max(maxEnd, newDstIt->second.end);
+        if (newSrcIt != info.ranges.end())
+          maxEnd = std::max(maxEnd, newSrcIt->second.end);
+        auto oldDstIt = info.ranges.find(oldDst);
+        auto srcIt = info.ranges.find(src);
+        if (oldDstIt != info.ranges.end())
+          oldDstIt->second.end = std::max(oldDstIt->second.end, maxEnd);
+        if (srcIt != info.ranges.end())
+          srcIt->second.end = std::max(srcIt->second.end, maxEnd);
       }
     }
   }

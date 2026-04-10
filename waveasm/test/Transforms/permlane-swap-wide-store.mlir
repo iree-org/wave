@@ -67,7 +67,60 @@ waveasm.program @permlane_cndmask_dwordx4_store
 
 // -----
 
-// Test 2: dst==src fallback path for v_permlane16_swap_b32.
+// Test 2: Dual-output pair op for paired wide stores (no duplicate stores).
+// V_PERMLANE16_SWAP_B32_PAIR takes two inputs (old_dst, src) and produces
+// two outputs (new_dst = partner's src, new_src = partner's old_dst).
+// CHECK-LABEL: permlane_pair_wide_store:
+waveasm.program @permlane_pair_wide_store
+  target = #waveasm.target<#waveasm.gfx950, 5>
+  abi = #waveasm.abi<>
+  attributes {vgprs = 32 : i64, sgprs = 32 : i64} {
+
+  %a_lo = waveasm.precolored.vreg 0 : !waveasm.pvreg<0>
+  %a_hi = waveasm.precolored.vreg 1 : !waveasm.pvreg<1>
+  %b_lo = waveasm.precolored.vreg 2 : !waveasm.pvreg<2>
+  %b_hi = waveasm.precolored.vreg 3 : !waveasm.pvreg<3>
+
+  %srd = waveasm.precolored.sreg 0, 4 : !waveasm.psreg<0, 4>
+  %voff = waveasm.precolored.vreg 4 : !waveasm.pvreg<4>
+
+  %vcc = waveasm.precolored.sreg 106, 2 : !waveasm.psreg<106, 2>
+  %lane_id = waveasm.precolored.vreg 5 : !waveasm.pvreg<5>
+  %c16 = waveasm.constant 16 : !waveasm.imm<16>
+
+  waveasm.v_cmp_lt_u32 %lane_id, %c16 : !waveasm.pvreg<5>, !waveasm.imm<16>
+
+  // CHECK: v_permlane16_swap_b32
+  %partner_b_lo, %partner_a_lo = waveasm.v_permlane16_swap_b32_pair %a_lo, %b_lo
+      : !waveasm.pvreg<0>, !waveasm.pvreg<2> -> !waveasm.vreg, !waveasm.vreg
+  // CHECK: v_permlane16_swap_b32
+  %partner_b_hi, %partner_a_hi = waveasm.v_permlane16_swap_b32_pair %a_hi, %b_hi
+      : !waveasm.pvreg<1>, !waveasm.pvreg<3> -> !waveasm.vreg, !waveasm.vreg
+
+  // Lower lane: [a_lo, a_hi, partner_a_lo, partner_a_hi]
+  // Upper lane: [partner_b_lo, partner_b_hi, b_lo, b_hi]
+  %d0 = waveasm.v_cndmask_b32 %partner_b_lo, %a_lo, %vcc
+      : !waveasm.vreg, !waveasm.pvreg<0>, !waveasm.psreg<106, 2> -> !waveasm.vreg
+  %d1 = waveasm.v_cndmask_b32 %partner_b_hi, %a_hi, %vcc
+      : !waveasm.vreg, !waveasm.pvreg<1>, !waveasm.psreg<106, 2> -> !waveasm.vreg
+  %d2 = waveasm.v_cndmask_b32 %b_lo, %partner_a_lo, %vcc
+      : !waveasm.pvreg<2>, !waveasm.vreg, !waveasm.psreg<106, 2> -> !waveasm.vreg
+  %d3 = waveasm.v_cndmask_b32 %b_hi, %partner_a_hi, %vcc
+      : !waveasm.pvreg<3>, !waveasm.vreg, !waveasm.psreg<106, 2> -> !waveasm.vreg
+
+  %packed = waveasm.pack %d0, %d1, %d2, %d3
+      : (!waveasm.vreg, !waveasm.vreg, !waveasm.vreg, !waveasm.vreg) -> !waveasm.vreg<4, 4>
+
+  // CHECK: buffer_store_dwordx4
+  waveasm.buffer_store_dwordx4 %packed, %srd, %voff
+      : !waveasm.vreg<4, 4>, !waveasm.psreg<0, 4>, !waveasm.pvreg<4>
+
+  waveasm.s_endpgm
+}
+
+// -----
+
+// Test 3: dst==src fallback path for v_permlane16_swap_b32.
 // When the allocator assigns the same register for dst and src, the emitter
 // uses scratch VGPRs to avoid clobbering.
 // This test uses a tight register budget to encourage dst==src allocation.

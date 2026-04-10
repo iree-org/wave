@@ -540,6 +540,29 @@ def WaveASM_V_PERMLANE16_SWAP_B32 : WAVEASMOp<"v_permlane16_swap_b32", [Pure]> {
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($dst)";
 }
 
+// Dual-output lane swap: exposes BOTH hardware outputs of
+// v_permlane16_swap_b32 to SSA.  The hardware exchanges values between
+// lanes i and i^16:
+//   new_dst = partner's old src
+//   new_src = partner's old_dst
+// The assembly emitter copies old_dst and src into scratch VGPRs, executes
+// the swap on those scratches, then copies both results to the allocated
+// output registers.  This avoids the clobbering problem of the single-output
+// V_PERMLANE16_SWAP_B32 and enables paired wide stores without duplicate
+// writes.
+def WaveASM_V_PERMLANE16_SWAP_B32_PAIR : WAVEASMOp<"v_permlane16_swap_b32_pair", [Pure]> {
+  let summary = "Swap VGPR values between lanes 16 apart (dual output)";
+  let description = [{
+    Like v_permlane16_swap_b32 but models both hardware outputs:
+      new_dst = partner lane's src
+      new_src = partner lane's old_dst
+    Both inputs are preserved (copied to scratch before the swap).
+  }];
+  let arguments = (ins WaveASM_AnyVGPR:$old_dst, WaveASM_AnyVGPR:$src);
+  let results = (outs WaveASM_AnyVGPR:$new_dst, WaveASM_AnyVGPR:$new_src);
+  let assemblyFormat = "$old_dst `,` $src attr-dict `:` type($old_dst) `,` type($src) `->` type($new_dst) `,` type($new_src)";
+}
+
 // Bit operations
 def WaveASM_V_NOT_B32 : VALUUnaryOp<"v_not_b32">;
 def WaveASM_V_NOT_B64 : VALUUnaryOp<"v_not_b64">;

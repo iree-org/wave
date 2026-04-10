@@ -1338,6 +1338,11 @@ def _generate_asm_code(mb, options):
         mlir_file.write(kernel_mlir)
         mlir_path = mlir_file.name
 
+    # DEBUG: save a copy of the MLIR IR for inspection
+    import shutil as _shutil
+
+    _shutil.copy2(mlir_path, "/tmp/waveasm_input.mlir")
+
     try:
         base_passes = [
             "--mlir-cse",

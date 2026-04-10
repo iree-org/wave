@@ -1324,27 +1324,30 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
 
     use_llvm_store = flags != MemoryAccessFlags.NONE
 
-    if getattr(node, "_permlane_pack_global", False):
+    import os as _os
+
+    _use_old_asm = _os.environ.get("WAVE_OLD_ASM_STORES", "") == "1"
+    _has_pack = getattr(node, "_permlane_pack_global", False)
+
+    if _has_pack and _use_old_asm and emitter.options.backend == "asm":
+        _write_permlane_pack_to_global_asm(
+            emitter,
+            insert_vector,
+            kb_dest,
+            output_shape,
+            start_indices,
+            start_indices_wg,
+            start_indices_th,
+            get_custom(memory),
+            index,
+        )
+        return
+
+    if _has_pack:
         is_shared = get_custom(memory).type.address_space == SHARED_ADDRESS_SPACE
         is_bf16 = isinstance(element_type, BF16Type)
         if not is_shared and is_bf16:
             role = getattr(node, "_permlane_pack_role", "unpaired")
-
-            # ASM: use single-tile path while paired path address issue
-            # is being debugged.
-            if emitter.options.backend == "asm":
-                _write_permlane_pack_to_global_asm(
-                    emitter,
-                    insert_vector,
-                    kb_dest,
-                    output_shape,
-                    start_indices,
-                    start_indices_wg,
-                    start_indices_th,
-                    get_custom(memory),
-                    index,
-                )
-                return
 
             if role == "first":
                 node._stashed_codegen = {
@@ -1505,28 +1508,16 @@ def _write_permlane_pair_to_global(
 
     swap_type = llvm_d.StructType.get_literal([i32_type, i32_type])
 
-    if is_asm:
-        # ASM backend: separate swaps per output element.
-        partner_b_lo = llvm_d.extractvalue(
-            i32_type, rocdl_d.permlane16_swap(swap_type, a_lo, b_lo, False, False), [0]
-        )
-        partner_a_lo = llvm_d.extractvalue(
-            i32_type, rocdl_d.permlane16_swap(swap_type, b_lo, a_lo, False, False), [0]
-        )
-        partner_b_hi = llvm_d.extractvalue(
-            i32_type, rocdl_d.permlane16_swap(swap_type, a_hi, b_hi, False, False), [0]
-        )
-        partner_a_hi = llvm_d.extractvalue(
-            i32_type, rocdl_d.permlane16_swap(swap_type, b_hi, a_hi, False, False), [0]
-        )
-    else:
-        # LLVM backend: 2 swaps, extract both elements.
-        swap_lo = rocdl_d.permlane16_swap(swap_type, a_lo, b_lo, False, False)
-        swap_hi = rocdl_d.permlane16_swap(swap_type, a_hi, b_hi, False, False)
-        partner_b_lo = llvm_d.extractvalue(i32_type, swap_lo, [0])
-        partner_a_lo = llvm_d.extractvalue(i32_type, swap_lo, [1])
-        partner_b_hi = llvm_d.extractvalue(i32_type, swap_hi, [0])
-        partner_a_hi = llvm_d.extractvalue(i32_type, swap_hi, [1])
+    # 2 swaps, extract both elements from each.
+    # Element [0] = new_dst = partner's src, Element [1] = new_src = partner's old_dst.
+    # The WaveASM handler creates V_PERMLANE16_SWAP_B32_PAIR when it detects
+    # that element [1] is extracted, properly modeling both hardware outputs.
+    swap_lo = rocdl_d.permlane16_swap(swap_type, a_lo, b_lo, False, False)
+    swap_hi = rocdl_d.permlane16_swap(swap_type, a_hi, b_hi, False, False)
+    partner_b_lo = llvm_d.extractvalue(i32_type, swap_lo, [0])
+    partner_a_lo = llvm_d.extractvalue(i32_type, swap_lo, [1])
+    partner_b_hi = llvm_d.extractvalue(i32_type, swap_hi, [0])
+    partner_a_hi = llvm_d.extractvalue(i32_type, swap_hi, [1])
 
     lane_in_wave = arith_d.remui(emitter.thread_ids[0], arith_d.constant(idx_type, 64))
     half_pos = arith_d.remui(lane_in_wave, arith_d.constant(idx_type, 32))
