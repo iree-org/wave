@@ -968,9 +968,10 @@ static LogicalResult handleLDSLoad(LLVM::LoadOp op, Value addr,
   } else if (numBytes == 16) {
     VRegType wideTy = ctx.createVRegType(4, 4);
     loadOp = DS_READ_B128::create(builder, loc, TypeRange{wideTy}, *offset);
-  } else
+  } else {
     return op->emitOpError("unsupported LDS load size: ")
            << numBytes << " bytes";
+  }
 
   ctx.getMapper().mapValue(op.getResult(), loadOp->getResult(0));
   return success();
@@ -1085,7 +1086,6 @@ static LogicalResult handleMFMA_F32_16x16x16_F16(ROCDL::mfma_f32_16x16x16f16 op,
 // SCF for/yield handler
 //===----------------------------------------------------------------------===//
 
-/// Forward declaration for recursive op translation.
 static LogicalResult translateOp(Operation *op, LLVMTranslationState &st);
 
 static FailureOr<Value> materializeI32SReg(Value v, StringRef name,
