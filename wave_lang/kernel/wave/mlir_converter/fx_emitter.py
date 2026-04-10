@@ -1816,17 +1816,17 @@ def convert_mlir_to_trace(
         if (hyper_params := func_op.attributes.get("wave.hyperparameters")) is not None:
             subs: dict[IndexSymbol, int] = {}
             deferred: dict[str, tuple[IndexSymbol, IndexExpr]] = {}
-            for param in hyper_params.mapping:
-                sym = index_symbol(param.name)
-                if not isinstance(param.attr, WaveExprListAttr):
-                    subs[sym] = param.attr.value
+            for sym_attr, value_attr in hyper_params.mapping:
+                sym = index_symbol(sym_attr.name)
+                if not isinstance(value_attr, WaveExprListAttr):
+                    subs[sym] = value_attr.value
                     continue
-                exprs = expr_list_attr_to_exprs(param.attr)
+                exprs = expr_list_attr_to_exprs(value_attr)
                 assert len(exprs) == 1, (
                     f"Expected single expression for derived dim {sym}, "
                     f"got {len(exprs)}"
                 )
-                deferred[param.name] = (sym, exprs[0])
+                deferred[sym_attr.name] = (sym, exprs[0])
             for name, (sym, expr) in deferred.items():
                 derived_dims[name] = expr
                 evaluated = expr.subs(subs)
