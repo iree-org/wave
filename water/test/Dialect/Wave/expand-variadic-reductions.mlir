@@ -44,10 +44,10 @@ func.func @expand_preserves_axis(%a: !wave.tensor<any of f32>, %b: !wave.tensor<
 // CHECK-LABEL: @expand_preserves_index
 // CHECK-SAME: (%[[A:.*]]: {{.*}}, %[[B:.*]]: {{.*}}, %[[INIT:.*]]: {{.*}})
 func.func @expand_preserves_index(%a: !wave.tensor<[@N, @M] of f32>, %b: !wave.tensor<[@N, @M] of f32>, %init: !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32> {
-  // CHECK: %[[R0:.*]] = wave.sum %[[A]] init(%[[INIT]]) <warp> index [{N : <[] -> (42, 1, 1)>}]
-  // CHECK: %[[R1:.*]] = wave.sum %[[B]] init(%[[R0]]) <warp> index [{N : <[] -> (42, 1, 1)>}]
+  // CHECK: %[[R0:.*]] = wave.sum %[[A]] init(%[[INIT]]) <warp> index [#wave.symbol_mapping<@N =
+  // CHECK: %[[R1:.*]] = wave.sum %[[B]] init(%[[R0]]) <warp> index [#wave.symbol_mapping<@N =
   // CHECK: return %[[R1]]
-  %result = wave.sum %a, %b init(%init) <warp> index [{N : <[] -> (42, 1, 1)>}] : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
+  %result = wave.sum %a, %b init(%init) <warp> index [#wave.symbol_mapping<@N = #wave.index_mapping<[] -> (42, 1, 1)>>] : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32>
   return %result : !wave.tensor<[@N] of f32>
 }
 

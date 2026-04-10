@@ -50,7 +50,7 @@ func.func @propagate_register_write_index_expr(%mem: !wave.tensor<[@M] of f16, <
   // CHECK: wave.register {{.*}} : vector<4xf16>
   %reg = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
   // CHECK: wave.write {{.*}} : vector<4xf16>, !wave.tensor<[@M] of f16, <global>>
-  wave.write %reg, %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}]
+  wave.write %reg, %mem index [#wave.symbol_mapping<@M = #wave.index_mapping<[] -> (<NULL>, 4, <NULL>)>>]
      : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
   return
 }
@@ -61,7 +61,7 @@ func.func @propagate_register_write_index_expr(%mem: !wave.tensor<[@M] of f16, <
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>] {
 func.func @propagate_register_write_index_expr_conflict(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<@M = 128>, wave.constraints = []}  {
   %cst = arith.constant 0.0 : f16
-  %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
+  %reg = wave.register %cst index [#wave.symbol_mapping<@M = #wave.index_mapping<[] -> (<NULL>, 4, <NULL>)>>] : !wave.tensor<[@M] of f16, <register>>
   // expected-error @below {{failed to propagate elements per thread backward: mismatch between elements_per_thread attribute (8) and operand #0 (4)}}
   wave.write %reg, %mem { elements_per_thread = 8 }
      : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
@@ -89,11 +89,15 @@ func.func @mma_operands_from_reads(
   %c = wave.read %mem_c { elements_per_thread = 8 } : (!wave.tensor<[@M, @N] of f32, <global>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   // expected-error @below {{failed to propagate elements per thread forward during initialization: mismatch between index expression (1) and rhs #0 (8)}}
   %result = wave.mma %a, %b, %c index [
-    {M : <[] -> (<NULL>, 8, <NULL>)>, K : <[] -> (<NULL>, 1, <NULL>)>},
-    {K : <[] -> (<NULL>, 1, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>},
-    {M : <[] -> (<NULL>, 8, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>},
-    {M : <[] -> (<NULL>, 8, <NULL>)>, N : <[] -> (<NULL>, 1, <NULL>)>}
-  ] {kind =  #wave.mma_kind<f32_16x16x16_f16> } : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
+      #wave.symbol_mapping<@M = #wave.index_mapping<[] -> (<NULL>, 8, <NULL>)>,
+                           @K = #wave.index_mapping<[] -> (<NULL>, 1, <NULL>)>>,
+      #wave.symbol_mapping<@K = #wave.index_mapping<[] -> (<NULL>, 1, <NULL>)>,
+                           @N = #wave.index_mapping<[] -> (<NULL>, 1, <NULL>)>>,
+      #wave.symbol_mapping<@M = #wave.index_mapping<[] -> (<NULL>, 8, <NULL>)>,
+                           @N = #wave.index_mapping<[] -> (<NULL>, 1, <NULL>)>>,
+      #wave.symbol_mapping<@M = #wave.index_mapping<[] -> (<NULL>, 8, <NULL>)>,
+                           @N = #wave.index_mapping<[] -> (<NULL>, 1, <NULL>)>>
+    ] {kind =  #wave.mma_kind<f32_16x16x16_f16> } : (!wave.tensor<[@M, @K] of f16, <register>>, !wave.tensor<[@N, @K] of f16, <register>>, !wave.tensor<[@M, @N] of f32, <register>>) -> !wave.tensor<[@M, @N] of f32, <register>>
   wave.write %result, %out { elements_per_thread = 8 } : !wave.tensor<[@M, @N] of f32, <register>>, !wave.tensor<[@M, @N] of f32, <global>>
   return
 }
@@ -107,8 +111,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   func.func @null_hyperparams_symbol_step(%mem: !wave.tensor<[@M] of f16, <global>>) attributes {wave.constraints = []} {
     %cst = arith.constant 0.0 : f16
     // expected-error @below {{couldn't identify elements per thread for result #0}}
-    %reg = wave.register %cst index [{M : <[#wave.symbol<"M">] -> (<NULL>, M, <NULL>)>}] : !wave.tensor<[@M] of f16, <register>>
-    wave.write %reg, %mem index [{M : <[#wave.symbol<"M">] -> (<NULL>, M, <NULL>)>}]
+    %reg = wave.register %cst index [#wave.symbol_mapping<@M = #wave.index_mapping<[#wave.symbol<"M">] -> (<NULL>, M, <NULL>)>>] : !wave.tensor<[@M] of f16, <register>>
+    wave.write %reg, %mem index [#wave.symbol_mapping<@M = #wave.index_mapping<[#wave.symbol<"M">] -> (<NULL>, M, <NULL>)>>]
       : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
     return
   }
@@ -126,7 +130,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: wave.register {{.*}} : vector<4xf16>
     %reg = wave.register %cst : !wave.tensor<[@M] of f16, <register>>
     // CHECK: wave.write {{.*}} : vector<4xf16>, !wave.tensor<[@M] of f16, <global>>
-    wave.write %reg, %mem index [{M : <[] -> (<NULL>, 4, <NULL>)>}]
+    wave.write %reg, %mem index [#wave.symbol_mapping<@M = #wave.index_mapping<[] -> (<NULL>, 4, <NULL>)>>]
       : !wave.tensor<[@M] of f16, <register>>, !wave.tensor<[@M] of f16, <global>>
     return
   }
@@ -139,7 +143,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   func.func @index_missing_dimension(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 64>, wave.constraints = []} {
     %cst = arith.constant 0.0 : f16
     // expected-error @below {{expected index to contain entries for all result #0 dimensions}}
-    %reg = wave.register %cst index [{M : <[] -> (<NULL>, 4, <NULL>)>}] : !wave.tensor<[@M, @N] of f16, <register>>
+    %reg = wave.register %cst index [#wave.symbol_mapping<@M = #wave.index_mapping<[] -> (<NULL>, 4, <NULL>)>>] : !wave.tensor<[@M, @N] of f16, <register>>
     wave.write %reg, %mem { elements_per_thread = 4 } : !wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <global>>
     return
   }

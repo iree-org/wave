@@ -626,16 +626,16 @@ func.func @lower_alloc() attributes {wave.hyperparameters = #wave.hyperparameter
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>] {
 // CHECK-LABEL: @lower_read
 func.func @lower_read(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 128, @N = 128>}  {
-  %0 = wave.read %mem index [{
+  %0 = wave.read %mem index [#wave.symbol_mapping<
       // CHECK: %[[BIDX_X:.*]] = gpu.block_id x
       // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
       // Note: BLOCK_M = 64
       // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + s1 mod 64)>()[%[[BIDX_X]], %[[TIDX_X]]]
-      M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
+      @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
       // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
       // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
       // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
-      N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)>}]
+      @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)>>]
      : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
      // CHECK: %[[VEC:.+]] = vector.load {{.*}}[%[[ROW]], %[[COL]]] : memref<{{.*}}xf16{{.*}}>, vector<8xf16>
 
@@ -648,16 +648,16 @@ func.func @lower_read(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes 
 normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full_op_types>, #wave.normal_form<index_exprs>, #wave.normal_form<memory_only_types>, #wave.normal_form<resolved_allocations>] {
 // CHECK-LABEL: @lower_read_non_innermost_dim
 func.func @lower_read_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 128, @N = 128>}  {
-  %0 = wave.read %mem index [{
+  %0 = wave.read %mem index [#wave.symbol_mapping<
     // CHECK: %[[BIDX_X:.*]] = gpu.block_id x
     // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
     // Note: BLOCK_M = 64
     // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + s1 * 8)>()[%[[BIDX_X]], %[[TIDX_X]]]
-    M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 * 8 , 8, 64)>,
+    @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 * 8 , 8, 64)>,
     // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
     // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
     // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
-    N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)>}]
+    @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)>>]
     : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
     // CHECK: %[[PAD:.*]] = arith.constant {{.*}} : f16
     // CHECK: vector.transfer_read {{.*}}[%[[ROW]], %[[COL]]], %[[PAD]] {permutation_map = affine_map<(d0, d1) -> (d0)>} : memref<{{.*}}xf16{{.*}}>, vector<8xf16>
@@ -672,16 +672,16 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   func.func @lower_read_masked(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 100, @N = 50>} {
 
-    %v = wave.read %mem index [{
+    %v = wave.read %mem index [#wave.symbol_mapping<
         // CHECK: %[[BIDX_X:.*]] = gpu.block_id x
         // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
         // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1)>()[%[[BIDX_X]], %[[TIDX_X]]]
-        M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 1, 64)>,
+        @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 1, 64)>,
         // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
         // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
         // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 32)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
-        N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)>
-      }] { bounds = #wave.symbol_mapping<
+        @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)>
+      >] { bounds = #wave.symbol_mapping<
         @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
         @N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<4xf16>
@@ -713,10 +713,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   // CHECK-LABEL: @lower_read_masked_non_innermost_dim
   func.func @lower_read_masked_non_innermost_dim(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 100, @N = 50>} {
-    %v = wave.read %mem index [{
-        M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 8, 64)>,
-        N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 1, 1)>
-      }] { bounds = #wave.symbol_mapping<
+    %v = wave.read %mem index [#wave.symbol_mapping<
+        @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 8, 64)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 1, 1)>
+      >] { bounds = #wave.symbol_mapping<
         @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>,
         @N = #wave.expr_list<[#wave.symbol<"N">] -> (N)>>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
@@ -735,13 +735,13 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   // CHECK-LABEL: @lower_read_sparse_bounds
   func.func @lower_read_sparse_bounds(%mem: !wave.tensor<[@M, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 100, @N = 64>} {
-    %v = wave.read %mem index [{
+    %v = wave.read %mem index [#wave.symbol_mapping<
         // CHECK: %[[BIDX_X:.*]] = gpu.block_id x
         // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
         // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1)>()[%[[BIDX_X]], %[[TIDX_X]]]
-        M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 1, 64)>,
-        N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)>
-      }] { bounds = #wave.symbol_mapping<
+        @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (WG0 * BLOCK_M + T0, 1, 64)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + T1 * 32, 4, 1)>
+      >] { bounds = #wave.symbol_mapping<
         @M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<4xf16>
       // Only M dimension produces a mask — no andi needed.
@@ -763,10 +763,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       attributes {wave.hyperparameters = #wave.hyperparameters<@M = 128, @N = 128>} {
     // Test ReadOp lowering when result is already a vector type
     // (simulates after PropagateElementsPerThread pass)
-    %0 = wave.read %mem index [{
-        M : <[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>,
-        N : <[#wave.index_symbol<T0>] -> (T0, 8, 1)>
-      }]
+    %0 = wave.read %mem index [#wave.symbol_mapping<
+        @M = #wave.index_mapping<[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 8, 1)>
+      >]
       : (!wave.tensor<[@M, @N] of f16, <global>>) -> vector<8xf16>
 
     // CHECK: %[[READ:.*]] = vector.load
@@ -782,16 +782,16 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 func.func @lower_write(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 128, @N = 128>}  {
   %cst = arith.constant 0.0 : f16
   %reg = wave.register %cst : vector<8xf16>
-  wave.write %reg, %mem index [{
+  wave.write %reg, %mem index [#wave.symbol_mapping<
       // CHECK: %[[BIDX_X:.*]] = gpu.block_id x
       // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
       // Note: BLOCK_M = 64
       // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + s1 mod 64)>()[%[[BIDX_X]], %[[TIDX_X]]]
-      M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
+      @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 1, 64)>,
       // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
       // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
       // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
-      N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)>}]
+      @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, BLOCK_N ceildiv 8, 1)>>]
      : vector<8xf16>, !wave.tensor<[@M, @N] of f16, <global>>
      // CHECK: vector.store {{.*}}[%[[ROW]], %[[COL]]] : memref<{{.*}}xf16{{.*}}>, vector<8xf16>
      // CHECK-NOT: vector.transfer_write
@@ -806,16 +806,16 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 func.func @lower_write_non_innermost(%mem: !wave.tensor<[@M, @N] of f16, <global>>) attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64, @M = 128, @N = 128>}  {
   %cst = arith.constant 0.0 : f16
   %reg = wave.register %cst : vector<8xf16>
-  wave.write %reg, %mem index [{
+  wave.write %reg, %mem index [#wave.symbol_mapping<
       // CHECK: %[[BIDX_X:.*]] = gpu.block_id x
       // CHECK: %[[TIDX_X:.*]] = gpu.thread_id x
       // Note: BLOCK_M = 64
       // CHECK: %[[ROW:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + (s1 floordiv 64) * 32 + s1 mod 64)>()[%[[BIDX_X]], %[[TIDX_X]]]
-      M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 8, 64)>,
+      @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (BLOCK_M * WG0 + (BLOCK_M floordiv 2) * (T0 floordiv 64) + T0 mod 64, 8, 64)>,
       // CHECK: %[[BIDX_Y:.*]] = gpu.block_id y
       // CHECK: %[[TIDX_Y:.*]] = gpu.thread_id y
       // CHECK: %[[COL:.*]] = affine.apply affine_map<()[s0, s1] -> (s0 * 64 + s1 * 8)>()[%[[BIDX_Y]], %[[TIDX_Y]]]
-      N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)>}]
+      @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (WG1 * BLOCK_N + (BLOCK_N floordiv 8) * T1, 1, 1)>>]
      : vector<8xf16>, !wave.tensor<[@M, @N] of f16, <global>>
      // CHECK: vector.transfer_write {{.*}}, {{.*}}[{{.*}}, {{.*}}] {permutation_map = affine_map<(d0, d1) -> (d0)>} : vector<8xf16>, memref<{{.*}}xf16{{.*}}>
 
@@ -1210,10 +1210,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       %dst: memref<64x64xf16, #gpu.address_space<workgroup>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64>} {
     // CHECK: %[[READ:.*]] = vector.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<64x64xf16, #gpu.address_space<workgroup>>, vector<8xf16>
-    %0 = wave.read %src index [{
-        BLOCK_M : <[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64, 1, 64)>,
-        BLOCK_N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * 8, 8, 1)>
-      }]
+    %0 = wave.read %src index [#wave.symbol_mapping<
+        @BLOCK_M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64, 1, 64)>,
+        @BLOCK_N = #wave.index_mapping<[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * 8, 8, 1)>
+      >]
       : (memref<64x64xf16, #gpu.address_space<workgroup>>) -> vector<8xf16>
 
     // Permute is a pass-through at lowering time - just swaps dimension interpretation
@@ -1221,10 +1221,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %1 = wave.permute %0 : vector<8xf16> to vector<8xf16>
 
     // CHECK: vector.store %[[READ]], %{{.*}}[%{{.*}}, %{{.*}}] : memref<64x64xf16, #gpu.address_space<workgroup>>, vector<8xf16>
-    wave.write %1, %dst index [{
-        BLOCK_N : <[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_N">] -> (T0 mod 64, 1, 64)>,
-        BLOCK_M : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_M">] -> (T1 * 8, 8, 1)>
-      }]
+    wave.write %1, %dst index [#wave.symbol_mapping<
+        @BLOCK_N = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_N">] -> (T0 mod 64, 1, 64)>,
+        @BLOCK_M = #wave.index_mapping<[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_M">] -> (T1 * 8, 8, 1)>
+      >]
       : vector<8xf16>, memref<64x64xf16, #gpu.address_space<workgroup>>
     return
   }
@@ -1240,17 +1240,17 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   func.func @lower_read_write_memref(%mem: memref<64x64xf16, #gpu.address_space<workgroup>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@BLOCK_M = 64, @BLOCK_N = 64>} {
     // CHECK: %[[READ:.*]] = vector.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<64x64xf16, #gpu.address_space<workgroup>>, vector<8xf16>
-    %0 = wave.read %mem index [{
-        BLOCK_M : <[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64, 1, 64)>,
-        BLOCK_N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * 8, 8, 1)>
-      }]
+    %0 = wave.read %mem index [#wave.symbol_mapping<
+        @BLOCK_M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64, 1, 64)>,
+        @BLOCK_N = #wave.index_mapping<[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * 8, 8, 1)>
+      >]
       : (memref<64x64xf16, #gpu.address_space<workgroup>>) -> vector<8xf16>
 
     // CHECK: vector.store %[[READ]], %{{.*}}[%{{.*}}, %{{.*}}] : memref<64x64xf16, #gpu.address_space<workgroup>>, vector<8xf16>
-    wave.write %0, %mem index [{
-        BLOCK_M : <[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64, 1, 64)>,
-        BLOCK_N : <[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * 8, 8, 1)>
-      }]
+    wave.write %0, %mem index [#wave.symbol_mapping<
+        @BLOCK_M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.symbol<"BLOCK_M">] -> (T0 mod 64, 1, 64)>,
+        @BLOCK_N = #wave.index_mapping<[#wave.index_symbol<T1>, #wave.symbol<"BLOCK_N">] -> (T1 * 8, 8, 1)>
+      >]
       : vector<8xf16>, memref<64x64xf16, #gpu.address_space<workgroup>>
     return
   }
@@ -1272,10 +1272,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[BOUND_VEC:.*]] = vector.broadcast %[[BOUND]] : index to vector<4xindex>
     // CHECK: %[[MASK:.*]] = arith.cmpi slt, %[[OFFSET]], %[[BOUND_VEC]] : vector<4xindex>
     // CHECK: vector.transfer_read {{.*}}, %[[MASK]] {in_bounds = [true]
-    %0 = wave.read %mem index [{
-        M : <[#wave.index_symbol<T0>, #wave.symbol<"M">] -> (T0 * 4, 4, 1)>,
-        N : <[#wave.index_symbol<T1>, #wave.symbol<"N">] -> (T1, 1, 1)>
-      }] {bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
+    %0 = wave.read %mem index [#wave.symbol_mapping<
+        @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.symbol<"M">] -> (T0 * 4, 4, 1)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T1>, #wave.symbol<"N">] -> (T1, 1, 1)>
+      >] {bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
       : (memref<100x64xf16, #gpu.address_space<workgroup>>) -> vector<4xf16>
 
     // CHECK: %[[BOUND_W:.*]] = affine.apply affine_map<() -> (100)>()
@@ -1285,10 +1285,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[BOUND_VEC_W:.*]] = vector.broadcast %[[BOUND_W]] : index to vector<4xindex>
     // CHECK: %[[MASK_W:.*]] = arith.cmpi slt, %[[OFFSET_W]], %[[BOUND_VEC_W]] : vector<4xindex>
     // CHECK: vector.transfer_write {{.*}}, %[[MASK_W]] {in_bounds = [true]
-    wave.write %0, %mem index [{
-        M : <[#wave.index_symbol<T0>, #wave.symbol<"M">] -> (T0 * 4, 4, 1)>,
-        N : <[#wave.index_symbol<T1>, #wave.symbol<"N">] -> (T1, 1, 1)>
-      }] {bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
+    wave.write %0, %mem index [#wave.symbol_mapping<
+        @M = #wave.index_mapping<[#wave.index_symbol<T0>, #wave.symbol<"M">] -> (T0 * 4, 4, 1)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T1>, #wave.symbol<"N">] -> (T1, 1, 1)>
+      >] {bounds = #wave.symbol_mapping<@M = #wave.expr_list<[#wave.symbol<"M">] -> (M)>>}
       : vector<4xf16>, memref<100x64xf16, #gpu.address_space<workgroup>>
     return
   }
@@ -1315,11 +1315,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[IDX_K:.*]] = affine.apply affine_map<()[s0] -> (s0 * 2)>
     // CHECK: %[[IDX_N:.*]] = affine.apply affine_map<()[s0] -> (s0 * 4)>
     // CHECK: vector.load %{{.*}}[%[[IDX_M]], %[[IDX_K]], %[[IDX_N]]] : memref<64x32x128xf16, #gpu.address_space<workgroup>>, vector<8xf16>
-    %0 = wave.read %mem index [{
-        M : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
-        K : <[#wave.index_symbol<T1>] -> (T1 * 2, 1, 1)>,
-        N : <[#wave.index_symbol<T2>] -> (T2 * 4, 8, 1)>
-      }]
+    %0 = wave.read %mem index [#wave.symbol_mapping<
+        @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
+        @K = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 2, 1, 1)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T2>] -> (T2 * 4, 8, 1)>
+      >]
       : (memref<64x32x128xf16, #gpu.address_space<workgroup>>) -> vector<8xf16>
       return
   }
@@ -1343,10 +1343,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[M:.*]] = affine.apply affine_map<()[s0] -> (s0)>()[%[[T0]]]
     // CHECK: vector.transfer_read %{{.*}}[%[[N]], %[[M]]]
     // CHECK-SAME: {permutation_map = affine_map<(d0, d1) -> (d0)>}
-    %0 = wave.read %mem index [{
-        M : <[#wave.index_symbol<T0>] -> (T0, 1, 32)>,
-        N : <[#wave.index_symbol<T1>] -> (T1 * 8, 8, 1)>
-      }] {
+    %0 = wave.read %mem index [#wave.symbol_mapping<
+        @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 32)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 8, 8, 1)>
+      >] {
         mapping = #wave.expr_list<[] (d0, d1) -> (d1, d0)>
       } : (memref<64x32xf16, #gpu.address_space<workgroup>>) -> vector<8xf16>
     return
@@ -1370,10 +1370,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[M:.*]] = affine.apply affine_map<()[s0] -> (s0)>()[%[[T0]]]
     // CHECK: vector.transfer_write %{{.*}}, %{{.*}}[%[[N]], %[[M]]]
     // CHECK-SAME: {permutation_map = affine_map<(d0, d1) -> (d0)>}
-    wave.write %reg, %mem index [{
-        M : <[#wave.index_symbol<T0>] -> (T0, 1, 32)>,
-        N : <[#wave.index_symbol<T1>] -> (T1 * 8, 8, 1)>
-      }] {
+    wave.write %reg, %mem index [#wave.symbol_mapping<
+        @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 32)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 8, 8, 1)>
+      >] {
         mapping = #wave.expr_list<[] (d0, d1) -> (d1, d0)>
       } : vector<8xf16>, memref<64x32xf16, #gpu.address_space<workgroup>>
     return
@@ -1399,11 +1399,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[M:.*]] = affine.apply affine_map<()[s0] -> (s0 * 4)>()[%[[T1]]]
     // CHECK: vector.transfer_read %{{.*}}[%[[N]], %[[K]], %[[M]]]
     // CHECK-SAME: {permutation_map = affine_map<(d0, d1, d2) -> (d0)>}
-    %0 = wave.read %mem index [{
-        K : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
-        M : <[#wave.index_symbol<T1>] -> (T1 * 4, 1, 1)>,
-        N : <[#wave.index_symbol<T2>] -> (T2 * 8, 8, 1)>
-      }] {
+    %0 = wave.read %mem index [#wave.symbol_mapping<
+        @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
+        @M = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 4, 1, 1)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T2>] -> (T2 * 8, 8, 1)>
+      >] {
         mapping = #wave.expr_list<[] (d0, d1, d2) -> (d1, d2, d0)>
       } : (memref<8x16x4xf16, #gpu.address_space<workgroup>>) -> vector<8xf16>
     return
@@ -1429,11 +1429,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[M:.*]] = affine.apply affine_map<()[s0] -> (s0 * 4)>()[%[[T1]]]
     // CHECK: vector.transfer_write %{{.*}}, %{{.*}}[%[[N]], %[[K]], %[[M]]]
     // CHECK-SAME: {permutation_map = affine_map<(d0, d1, d2) -> (d0)>}
-    wave.write %reg, %mem index [{
-        K : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
-        M : <[#wave.index_symbol<T1>] -> (T1 * 4, 1, 1)>,
-        N : <[#wave.index_symbol<T2>] -> (T2 * 8, 8, 1)>
-      }] {
+    wave.write %reg, %mem index [#wave.symbol_mapping<
+        @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
+        @M = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 4, 1, 1)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T2>] -> (T2 * 8, 8, 1)>
+      >] {
         mapping = #wave.expr_list<[] (d0, d1, d2) -> (d1, d2, d0)>
       } : vector<8xf16>, memref<8x16x4xf16, #gpu.address_space<workgroup>>
     return
@@ -1458,11 +1458,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[M:.*]] = affine.apply affine_map<()[s0] -> (s0 * 4)>()[%[[T1]]]
     // CHECK: vector.transfer_read %{{.*}}[%[[N]], %[[K]], %[[M]]]
     // CHECK-SAME: {permutation_map = affine_map<(d0, d1, d2) -> (d0)>}
-    %0 = wave.read %sym index [{
-        K : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
-        M : <[#wave.index_symbol<T1>] -> (T1 * 4, 1, 1)>,
-        N : <[#wave.index_symbol<T2>] -> (T2 * 8, 8, 1)>
-      }] {
+    %0 = wave.read %sym index [#wave.symbol_mapping<
+        @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
+        @M = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 4, 1, 1)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T2>] -> (T2 * 8, 8, 1)>
+      >] {
         mapping = #wave.expr_list<[] (d0, d1, d2) -> (d1, d2, d0)>
       } : (!wave.tensor<[@N, @K, @M] of f16, <global>>) -> vector<8xf16>
     return
@@ -1488,11 +1488,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[M:.*]] = affine.apply affine_map<()[s0] -> (s0 * 4)>()[%[[T1]]]
     // CHECK: vector.transfer_write %{{.*}}, %{{.*}}[%[[N]], %[[K]], %[[M]]]
     // CHECK-SAME: {permutation_map = affine_map<(d0, d1, d2) -> (d0)>}
-    wave.write %reg, %sym index [{
-        K : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
-        M : <[#wave.index_symbol<T1>] -> (T1 * 4, 1, 1)>,
-        N : <[#wave.index_symbol<T2>] -> (T2 * 8, 8, 1)>
-      }] {
+    wave.write %reg, %sym index [#wave.symbol_mapping<
+        @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
+        @M = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 4, 1, 1)>,
+        @N = #wave.index_mapping<[#wave.index_symbol<T2>] -> (T2 * 8, 8, 1)>
+      >] {
         mapping = #wave.expr_list<[] (d0, d1, d2) -> (d1, d2, d0)>
       } : vector<8xf16>, !wave.tensor<[@N, @K, @M] of f16, <global>>
     return
@@ -1766,7 +1766,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[ADD:.*]] = arith.addi %[[START_VEC]], %[[IOTA]] : vector<4xindex>
     // CHECK: %[[RESULT:.*]] = arith.index_cast %[[ADD]] : vector<4xindex> to vector<4xi32>
     // CHECK: return %[[RESULT]]
-    %0 = wave.self_index @N index [{N : <[#wave.index_symbol<T0>] -> (T0, 4, 1)>}] : vector<4xi32>
+    %0 = wave.self_index @N index [#wave.symbol_mapping<@N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 4, 1)>>] : vector<4xi32>
     return %0 : vector<4xi32>
   }
 }
@@ -1788,7 +1788,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: %[[ADD:.*]] = arith.addi %[[START_VEC]], %[[SCALED]] : vector<4xindex>
     // CHECK: %[[RESULT:.*]] = arith.index_cast %[[ADD]] : vector<4xindex> to vector<4xi64>
     // CHECK: return %[[RESULT]]
-    %0 = wave.self_index @M index [{M : <[#wave.index_symbol<T0>] -> (T0 * 4, 4, 16)>}] : vector<4xi64>
+    %0 = wave.self_index @M index [#wave.symbol_mapping<@M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 4, 4, 16)>>] : vector<4xi64>
     return %0 : vector<4xi64>
   }
 }
@@ -1807,9 +1807,9 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // CHECK: vector.step : vector<8xindex>
     // CHECK: arith.addi
     // CHECK: arith.index_cast {{.*}} : vector<8xindex> to vector<8xi32>
-    %0 = wave.self_index @M index [{
-      M : <[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + T0, 8, 1)>
-    }] : vector<8xi32>
+    %0 = wave.self_index @M index [#wave.symbol_mapping<
+      @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.symbol<"BLOCK_M">, #wave.index_symbol<T0>] -> (WG0 * BLOCK_M + T0, 8, 1)>
+    >] : vector<8xi32>
     return %0 : vector<8xi32>
   }
 }
