@@ -8,8 +8,9 @@
 // Hazard Mitigation Pass - Insert s_nop instructions for hardware hazards
 //
 // This pass handles hardware-specific hazards that require NOP insertion:
-// - VALU → v_readfirstlane hazard (gfx940+)
-// - Trans → non-Trans VALU forwarding hazard (gfx940+)
+// - VALU -> v_readfirstlane hazard (gfx940+)
+// - Trans -> non-Trans VALU forwarding hazard (gfx940+)
+// - v_accvgpr_read_b32 -> VALU RAW hazard (gfx940+)
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMAttrs.h"
@@ -74,7 +75,7 @@ bool isVALUOp(Operation *op) {
   return true;
 }
 
-/// Check if an operation is v_readfirstlane
+/// Check if an operation is v_readfirstlane.
 bool isReadfirstlaneOp(Operation *op) { return isa<V_READFIRSTLANE_B32>(op); }
 
 /// Check if an operation does NOT emit an assembly instruction.
@@ -98,6 +99,9 @@ Operation *findPrecedingEmittingOp(ArrayRef<Operation *> ops, size_t start) {
   }
   return nullptr;
 }
+
+/// Check if an operation is v_accvgpr_read_b32 (AGPR -> VGPR move).
+bool isAccVgprReadOp(Operation *op) { return isa<V_ACCVGPR_READ_B32>(op); }
 
 /// Check if an operation is a transcendental instruction (uses the Trans
 /// pipeline which has different latency characteristics from the main VALU).
@@ -212,6 +216,16 @@ private:
       if (isVALUOp(op) && !isTransOp(op) && i > 0) {
         Operation *pred = findPrecedingEmittingOp(ops, i);
         if (pred && isTransOp(pred) && hasVGPRConflict(pred, op))
+          insertionPoints.push_back(op);
+      }
+
+      // Check for v_accvgpr_read_b32 -> VALU RAW hazard (gfx940+).
+      // On GFX950 the VGPR destination of v_accvgpr_read_b32 is not
+      // immediately available; a VALU that consumes it in the next cycle
+      // reads stale data.  Insert s_nop 0 to cover the 1-cycle wait.
+      if (isVALUOp(op) && i > 0) {
+        Operation *pred = findPrecedingEmittingOp(ops, i);
+        if (pred && isAccVgprReadOp(pred) && hasVGPRConflict(pred, op))
           insertionPoints.push_back(op);
       }
     }
