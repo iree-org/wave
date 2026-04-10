@@ -16,6 +16,7 @@ from wave_lang.support.ir_imports import (
     Attribute,
     BF16Type,
     DenseElementsAttr,
+    F32Type,
     IndexType,
     InsertionPoint,
     IntegerAttr,
@@ -1329,6 +1330,22 @@ def handle_write(emitter: WaveEmitter, node: fx.Node):
         if not is_shared and is_bf16:
             role = getattr(node, "_permlane_pack_role", "unpaired")
 
+            # ASM: use single-tile path while paired path address issue
+            # is being debugged.
+            if emitter.options.backend == "asm":
+                _write_permlane_pack_to_global_asm(
+                    emitter,
+                    insert_vector,
+                    kb_dest,
+                    output_shape,
+                    start_indices,
+                    start_indices_wg,
+                    start_indices_th,
+                    get_custom(memory),
+                    index,
+                )
+                return
+
             if role == "first":
                 node._stashed_codegen = {
                     "insert_vector": insert_vector,
@@ -1439,38 +1456,77 @@ def _write_permlane_pair_to_global(
         ``_create_vec_read_write`` call would need to be split into
         two lane-divergent stores.
     """
-    num_elems_a = vec_a.type.shape[0] if hasattr(vec_a.type, "shape") else 1
-    num_elems_b = vec_b.type.shape[0] if hasattr(vec_b.type, "shape") else 1
-    assert num_elems_a == 4 and num_elems_b == 4, (
-        f"_write_permlane_pair_to_global expects 4 bf16 elements per thread "
-        f"per tile, got {num_elems_a} and {num_elems_b}."
-    )
-
     bf16_type = BF16Type.get()
+    f32_type = F32Type.get()
+    i16_type = IntegerType.get_signless(16)
     i32_type = IntegerType.get_signless(32)
     idx_type = IndexType.get()
     v2i32_type = VectorType.get([2], i32_type)
     v4i32_type = VectorType.get([4], i32_type)
     v8bf16_type = VectorType.get([8], bf16_type)
 
-    i32_a = vector_d.bitcast(v2i32_type, vec_a)
-    a_lo = vector_d.extract(i32_a, static_position=[0], dynamic_position=[])
-    a_hi = vector_d.extract(i32_a, static_position=[1], dynamic_position=[])
+    is_asm = emitter.options.backend == "asm"
 
-    i32_b = vector_d.bitcast(v2i32_type, vec_b)
-    b_lo = vector_d.extract(i32_b, static_position=[0], dynamic_position=[])
-    b_hi = vector_d.extract(i32_b, static_position=[1], dynamic_position=[])
+    def _extract_i32_dwords(vec_bf16):
+        """Extract two i32 dwords from a vector<4xbf16>."""
+        if not is_asm:
+            i32_vec = vector_d.bitcast(v2i32_type, vec_bf16)
+            lo = vector_d.extract(i32_vec, static_position=[0], dynamic_position=[])
+            hi = vector_d.extract(i32_vec, static_position=[1], dynamic_position=[])
+            return lo, hi
+
+        f32_src = None
+        defn = vec_bf16.owner
+        if defn is not None and defn.name == "arith.truncf":
+            f32_src = defn.operands[0]
+        assert f32_src is not None, (
+            "ASM wide-store expects vec from arith.truncf; "
+            f"got {defn.name if defn else 'block arg'}"
+        )
+        e0 = vector_d.extract(f32_src, static_position=[0], dynamic_position=[])
+        e1 = vector_d.extract(f32_src, static_position=[1], dynamic_position=[])
+        e2 = vector_d.extract(f32_src, static_position=[2], dynamic_position=[])
+        e3 = vector_d.extract(f32_src, static_position=[3], dynamic_position=[])
+        b0 = arith_d.truncf(bf16_type, e0)
+        b1 = arith_d.truncf(bf16_type, e1)
+        b2 = arith_d.truncf(bf16_type, e2)
+        b3 = arith_d.truncf(bf16_type, e3)
+        c16 = arith_d.constant(i32_type, 16)
+
+        def _pack_pair(lo_bf16, hi_bf16):
+            lo_i32 = arith_d.extui(i32_type, arith_d.bitcast(i16_type, lo_bf16))
+            hi_i32 = arith_d.extui(i32_type, arith_d.bitcast(i16_type, hi_bf16))
+            return arith_d.ori(arith_d.shli(hi_i32, c16), lo_i32)
+
+        return _pack_pair(b0, b1), _pack_pair(b2, b3)
+
+    a_lo, a_hi = _extract_i32_dwords(vec_a)
+    b_lo, b_hi = _extract_i32_dwords(vec_b)
 
     swap_type = llvm_d.StructType.get_literal([i32_type, i32_type])
 
-    # old_dst = a, src = b  →  result[0] = partner's b, result[1] = partner's a
-    swap_lo = rocdl_d.permlane16_swap(swap_type, a_lo, b_lo, False, False)
-    swap_hi = rocdl_d.permlane16_swap(swap_type, a_hi, b_hi, False, False)
-
-    partner_b_lo = llvm_d.extractvalue(i32_type, swap_lo, [0])
-    partner_a_lo = llvm_d.extractvalue(i32_type, swap_lo, [1])
-    partner_b_hi = llvm_d.extractvalue(i32_type, swap_hi, [0])
-    partner_a_hi = llvm_d.extractvalue(i32_type, swap_hi, [1])
+    if is_asm:
+        # ASM backend: separate swaps per output element.
+        partner_b_lo = llvm_d.extractvalue(
+            i32_type, rocdl_d.permlane16_swap(swap_type, a_lo, b_lo, False, False), [0]
+        )
+        partner_a_lo = llvm_d.extractvalue(
+            i32_type, rocdl_d.permlane16_swap(swap_type, b_lo, a_lo, False, False), [0]
+        )
+        partner_b_hi = llvm_d.extractvalue(
+            i32_type, rocdl_d.permlane16_swap(swap_type, a_hi, b_hi, False, False), [0]
+        )
+        partner_a_hi = llvm_d.extractvalue(
+            i32_type, rocdl_d.permlane16_swap(swap_type, b_hi, a_hi, False, False), [0]
+        )
+    else:
+        # LLVM backend: 2 swaps, extract both elements.
+        swap_lo = rocdl_d.permlane16_swap(swap_type, a_lo, b_lo, False, False)
+        swap_hi = rocdl_d.permlane16_swap(swap_type, a_hi, b_hi, False, False)
+        partner_b_lo = llvm_d.extractvalue(i32_type, swap_lo, [0])
+        partner_a_lo = llvm_d.extractvalue(i32_type, swap_lo, [1])
+        partner_b_hi = llvm_d.extractvalue(i32_type, swap_hi, [0])
+        partner_a_hi = llvm_d.extractvalue(i32_type, swap_hi, [1])
 
     lane_in_wave = arith_d.remui(emitter.thread_ids[0], arith_d.constant(idx_type, 64))
     half_pos = arith_d.remui(lane_in_wave, arith_d.constant(idx_type, 32))
@@ -1491,29 +1547,45 @@ def _write_permlane_pair_to_global(
     elems_per_thread = arith_d.constant(idx_type, 4)
 
     # Lower lane uses tile A's address; upper lane uses tile B's address.
-    # Upper lane subtracts elems_per_thread from the last dim to align
-    # to the lower lane's column position (same as the single-write path).
     adj_th = list(start_indices_th_a)
     adj_full = list(start_indices_a)
-    for dim_idx in range(len(adj_th)):
-        if dim_idx == len(adj_th) - 1:
-            adj_b_th = arith_d.subi(start_indices_th_b[-1], elems_per_thread)
-            adj_b_full = arith_d.subi(start_indices_b[-1], elems_per_thread)
+
+    if is_asm:
+        # ASM backend: the SRD must be uniform (goes through readfirstlane).
+        # Both tiles share the same workgroup, so wg_a == wg_b at runtime.
+        # Use wg_a for the SRD and th_b directly for the thread offset.
+        for dim_idx in range(len(adj_th)):
+            if dim_idx == len(adj_th) - 1:
+                adj_b_th = arith_d.subi(start_indices_th_b[-1], elems_per_thread)
+                adj_b_full = arith_d.subi(start_indices_b[-1], elems_per_thread)
+            else:
+                adj_b_th = start_indices_th_b[dim_idx]
+                adj_b_full = start_indices_b[dim_idx]
             adj_th[dim_idx] = arith_d.select(is_lower, adj_th[dim_idx], adj_b_th)
             adj_full[dim_idx] = arith_d.select(is_lower, adj_full[dim_idx], adj_b_full)
-        else:
-            adj_th[dim_idx] = arith_d.select(
-                is_lower, start_indices_th_a[dim_idx], start_indices_th_b[dim_idx]
+        adj_wg = start_indices_wg_a
+    else:
+        for dim_idx in range(len(adj_th)):
+            if dim_idx == len(adj_th) - 1:
+                adj_b_th = arith_d.subi(start_indices_th_b[-1], elems_per_thread)
+                adj_b_full = arith_d.subi(start_indices_b[-1], elems_per_thread)
+                adj_th[dim_idx] = arith_d.select(is_lower, adj_th[dim_idx], adj_b_th)
+                adj_full[dim_idx] = arith_d.select(
+                    is_lower, adj_full[dim_idx], adj_b_full
+                )
+            else:
+                adj_th[dim_idx] = arith_d.select(
+                    is_lower, start_indices_th_a[dim_idx], start_indices_th_b[dim_idx]
+                )
+                adj_full[dim_idx] = arith_d.select(
+                    is_lower, start_indices_a[dim_idx], start_indices_b[dim_idx]
+                )
+        adj_wg_list = list(start_indices_wg_a)
+        for dim_idx in range(len(adj_wg_list)):
+            adj_wg_list[dim_idx] = arith_d.select(
+                is_lower, start_indices_wg_a[dim_idx], start_indices_wg_b[dim_idx]
             )
-            adj_full[dim_idx] = arith_d.select(
-                is_lower, start_indices_a[dim_idx], start_indices_b[dim_idx]
-            )
-
-    adj_wg = list(start_indices_wg_a)
-    for dim_idx in range(len(adj_wg)):
-        adj_wg[dim_idx] = arith_d.select(
-            is_lower, start_indices_wg_a[dim_idx], start_indices_wg_b[dim_idx]
-        )
+        adj_wg = tuple(adj_wg_list)
 
     sel_output_shape = output_shape_a
     sel_memory_custom = memory_custom_a
@@ -1527,12 +1599,115 @@ def _write_permlane_pair_to_global(
         wide_vec,
         None,
         tuple(adj_full),
-        tuple(adj_wg),
+        adj_wg,
         tuple(adj_th),
         8,
         sel_memory_custom,
         None,
         node_index=sel_index,
+    )
+
+
+def _write_permlane_pack_to_global_asm(
+    emitter: WaveEmitter,
+    insert_vector: Value,
+    kb_dest: Value,
+    output_shape: tuple,
+    start_indices: tuple,
+    start_indices_wg: tuple,
+    start_indices_th: tuple,
+    memory_custom,
+    index: dict,
+):
+    """Single-tile wide store for ASM backend with explicit bf16 conversion.
+
+    Each lane exchanges its own 4 bf16 values with a partner 16 apart,
+    assembles an 8-element wide vector, and writes buffer_store_dwordx4.
+    Both lane halves write identical data (duplicate stores).
+    """
+    bf16_type = BF16Type.get()
+    f32_type = F32Type.get()
+    i16_type = IntegerType.get_signless(16)
+    i32_type = IntegerType.get_signless(32)
+    idx_type = IndexType.get()
+    v4i32_type = VectorType.get([4], i32_type)
+    v8bf16_type = VectorType.get([8], bf16_type)
+
+    f32_src = None
+    defn = insert_vector.owner
+    if defn is not None and defn.name == "arith.truncf":
+        f32_src = defn.operands[0]
+    assert (
+        f32_src is not None
+    ), "_write_permlane_pack_to_global_asm expects vec from arith.truncf"
+
+    e0 = vector_d.extract(f32_src, static_position=[0], dynamic_position=[])
+    e1 = vector_d.extract(f32_src, static_position=[1], dynamic_position=[])
+    e2 = vector_d.extract(f32_src, static_position=[2], dynamic_position=[])
+    e3 = vector_d.extract(f32_src, static_position=[3], dynamic_position=[])
+    b0 = arith_d.truncf(bf16_type, e0)
+    b1 = arith_d.truncf(bf16_type, e1)
+    b2 = arith_d.truncf(bf16_type, e2)
+    b3 = arith_d.truncf(bf16_type, e3)
+
+    c16 = arith_d.constant(i32_type, 16)
+
+    def _pack_pair(lo_bf16, hi_bf16):
+        lo_i32 = arith_d.extui(i32_type, arith_d.bitcast(i16_type, lo_bf16))
+        hi_i32 = arith_d.extui(i32_type, arith_d.bitcast(i16_type, hi_bf16))
+        return arith_d.ori(arith_d.shli(hi_i32, c16), lo_i32)
+
+    own_lo = _pack_pair(b0, b1)
+    own_hi = _pack_pair(b2, b3)
+
+    swap_type = llvm_d.StructType.get_literal([i32_type, i32_type])
+    partner_lo = llvm_d.extractvalue(
+        i32_type, rocdl_d.permlane16_swap(swap_type, own_lo, own_lo, False, False), [0]
+    )
+    partner_hi = llvm_d.extractvalue(
+        i32_type, rocdl_d.permlane16_swap(swap_type, own_hi, own_hi, False, False), [0]
+    )
+
+    lane_in_wave = arith_d.remui(emitter.thread_ids[0], arith_d.constant(idx_type, 64))
+    half_pos = arith_d.remui(lane_in_wave, arith_d.constant(idx_type, 32))
+    is_lower = arith_d.cmpi(
+        arith_d.CmpIPredicate.ult, half_pos, arith_d.constant(idx_type, 16)
+    )
+
+    d0 = arith_d.select(is_lower, own_lo, partner_lo)
+    d1 = arith_d.select(is_lower, own_hi, partner_hi)
+    d2 = arith_d.select(is_lower, partner_lo, own_lo)
+    d3 = arith_d.select(is_lower, partner_hi, own_hi)
+
+    wide_i32 = vector_d.from_elements(v4i32_type, [d0, d1, d2, d3])
+    wide_vec = vector_d.bitcast(v8bf16_type, wide_i32)
+
+    num_elems = 4
+    elems_per_thread = arith_d.constant(idx_type, num_elems)
+
+    adj_th = list(start_indices_th)
+    adj_th[-1] = arith_d.select(
+        is_lower, adj_th[-1], arith_d.subi(adj_th[-1], elems_per_thread)
+    )
+
+    adj_full = list(start_indices)
+    adj_full[-1] = arith_d.select(
+        is_lower, adj_full[-1], arith_d.subi(adj_full[-1], elems_per_thread)
+    )
+
+    _create_vec_read_write(
+        emitter,
+        output_shape,
+        kb_dest,
+        wide_vec,
+        None,
+        tuple(adj_full),
+        start_indices_wg,
+        tuple(adj_th),
+        8,
+        memory_custom,
+        None,
+        node_index=index,
     )
 
 

@@ -778,6 +778,7 @@ LogicalResult handleArithShRSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithExtUI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithExtSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithTruncI(Operation *op, TranslationContext &ctx);
+LogicalResult handleArithBitcast(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithMinSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithMaxSI(Operation *op, TranslationContext &ctx);
 LogicalResult handleArithMinUI(Operation *op, TranslationContext &ctx);
@@ -1649,8 +1650,6 @@ LogicalResult handleVectorStore(Operation *op, TranslationContext &ctx) {
     // coalescing path where the data went through v_cvt_pk_bf16_f32 +
     // PackOp).  Packed bf16 uses numElems/2 registers (2 bf16 per dword);
     // unpacked f32 uses numElems registers.
-    // TODO: Replace this register-count heuristic with an explicit flag
-    // propagated from the truncf/packing handler for robustness.
     if (elementType.isBF16() && data.has_value()) {
       int64_t numElems = vectorType.getNumElements();
       int64_t dataRegs = getRegSize(data->getType());
@@ -1997,6 +1996,7 @@ void OpHandlerRegistry::registerDefaultHandlers(mlir::MLIRContext *ctx) {
   REGISTER_HANDLER(arith::ExtUIOp, handleArithExtUI);
   REGISTER_HANDLER(arith::ExtSIOp, handleArithExtSI);
   REGISTER_HANDLER(arith::TruncIOp, handleArithTruncI);
+  REGISTER_HANDLER(arith::BitcastOp, handleArithBitcast);
   REGISTER_HANDLER(arith::MinSIOp, handleArithMinSI);
   REGISTER_HANDLER(arith::MaxSIOp, handleArithMaxSI);
   REGISTER_HANDLER(arith::MinUIOp, handleArithMinUI);

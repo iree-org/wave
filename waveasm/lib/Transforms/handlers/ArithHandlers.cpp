@@ -327,6 +327,15 @@ LogicalResult handleArithTruncI(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+LogicalResult handleArithBitcast(Operation *op, TranslationContext &ctx) {
+  auto castOp = cast<arith::BitcastOp>(op);
+  auto src = ctx.getMapper().getMapped(castOp.getIn());
+  if (src) {
+    ctx.getMapper().mapValue(castOp.getResult(), *src);
+  }
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Comparison and Select Operations
 //===----------------------------------------------------------------------===//
