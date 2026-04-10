@@ -812,40 +812,18 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
             loop_bitcast_b, dim=K, num_partitions=2
         )
 
-        # TODO: FIX THIS, make this dynamic based on the block size
         # Count only actual global->VGPR Read nodes from the scheduled scale groups.
-        # loop_a_scale_reads = tkw.filter_nodes(loop_all_read_a_scale, node_type=tkw.Read)
-        # loop_b_scale_reads = tkw.filter_nodes(loop_all_read_b_scale, node_type=tkw.Read)
-        # number_outstanding_loads_to_vgpr = len(loop_a_scale_reads) + len(
-        #     loop_b_scale_reads
-        # )
-        number_outstanding_loads_to_vgpr = 0
+        loop_a_scale_reads = tkw.filter_nodes(loop_all_read_a_scale, node_type=tkw.Read)
+        loop_b_scale_reads = tkw.filter_nodes(loop_all_read_b_scale, node_type=tkw.Read)
+        number_outstanding_loads_to_vgpr = len(loop_a_scale_reads) + len(
+            loop_b_scale_reads
+        )
         safe = 0
         if block is not None and block == (256, 192, 256):
             safe = 2
-            number_outstanding_loads_to_vgpr = 5  ## HARDCODED FOR NOW TODO: FIX THIS
 
         if block is not None and block == (256, 160, 256):
             safe = 5
-            number_outstanding_loads_to_vgpr = 12
-
-        if block is not None and (block == (64, 64, 256) or block == (128, 128, 256)):
-            safe = 0
-            number_outstanding_loads_to_vgpr = 3
-
-        if block is not None and block == (128, 64, 256):
-            safe = 0
-            number_outstanding_loads_to_vgpr = 3
-
-        if block is not None and block == (128, 256, 256):
-            safe = 0
-            number_outstanding_loads_to_vgpr = 5
-        if block is not None and block == (256, 128, 256):
-            safe = 0
-            number_outstanding_loads_to_vgpr = 4
-        if block is not None and block == (256, 256, 256):
-            safe = 0
-            number_outstanding_loads_to_vgpr = 6
 
         # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
         # In case a second a second workgroup barrier is needed, another schedule is created to hide the latency of that second barrier, by scheduling safe ds_read ops before the second barrier (see get_mxfp4_dbuf_mixed_pingpong_schedule).
