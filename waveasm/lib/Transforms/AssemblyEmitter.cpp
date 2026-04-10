@@ -21,8 +21,11 @@
 #include "waveasm/Transforms/RegAlloc.h"
 
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
+
+#define DEBUG_TYPE "waveasm-assembly-emitter"
 
 #include <sstream>
 
@@ -970,6 +973,91 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
             operands.push_back(resolveValue(cvtOp.getSrc()));
             operands.push_back("0");
             return formatter.format("v_cvt_pk_bf16_f32", operands);
+          })
+
+      // V_PERMLANE16_SWAP_B32: swap lanes 16 apart.
+      // The hardware clobbers BOTH dst and src. The handler inserts a
+      // v_mov_b32 copy before the swap, so the allocator should always
+      // assign dst != src. The fallback uses two scratch VGPRs above
+      // the allocator's range (kScratchVGPR and kScratchVGPR + 1).
+      .Case<V_PERMLANE16_SWAP_B32>(
+          [&](V_PERMLANE16_SWAP_B32 swapOp) -> std::optional<std::string> {
+            std::string dst = resolveValue(swapOp.getDst());
+            std::string src = resolveValue(swapOp.getSrc());
+            if (dst != src) {
+              llvm::SmallVector<std::string> operands = {dst, src};
+              return formatter.format("v_permlane16_swap_b32", operands);
+            }
+            // dst==src fallback: use two scratch VGPRs both above allocator
+            // range
+            std::string scratch0 = formatVGPRRange(kScratchVGPR, 1);
+            std::string scratch1 = formatVGPRRange(kScratchVGPR + 1, 1);
+            peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 2);
+            invalidateScratchCache();
+            return "  v_mov_b32 " + scratch0 + ", " + src + "\n" +
+                   "  v_mov_b32 " + scratch1 + ", " + src + "\n" +
+                   "  s_nop 1\n" + "  v_permlane16_swap_b32 " + dst + ", " +
+                   scratch1 + "\n" + "  v_mov_b32 " + src + ", " + scratch0;
+          })
+
+      // V_PERMLANE16_SWAP_B32_PAIR: dual-output swap for paired wide stores.
+      // Copies both inputs to scratch VGPRs, executes the swap on the
+      // scratches, then copies both results to the allocated output registers.
+      .Case<V_PERMLANE16_SWAP_B32_PAIR>(
+          [&](V_PERMLANE16_SWAP_B32_PAIR pairOp) -> std::optional<std::string> {
+            std::string newDst = resolveValue(pairOp.getNewDst());
+            std::string newSrc = resolveValue(pairOp.getNewSrc());
+            std::string oldDst = resolveValue(pairOp.getOldDst());
+            std::string src = resolveValue(pairOp.getSrc());
+
+            // Always use scratch VGPRs: the in-place swap clobbers the input
+            // registers, but downstream selects still need the originals.
+            std::string s0 = formatVGPRRange(kScratchVGPR, 1);
+            std::string s1 = formatVGPRRange(kScratchVGPR + 1, 1);
+            peakVGPRs = std::max(peakVGPRs, kScratchVGPR + 2);
+            invalidateScratchCache();
+            return "  v_mov_b32 " + s0 + ", " + oldDst + "\n" + "  v_mov_b32 " +
+                   s1 + ", " + src + "\n" + "  s_nop 1\n" +
+                   "  v_permlane16_swap_b32 " + s0 + ", " + s1 + "\n" +
+                   "  v_mov_b32 " + newDst + ", " + s0 + "\n" + "  v_mov_b32 " +
+                   newSrc + ", " + s1;
+          })
+
+      // V_ACCVGPR_READ_B32: unroll multi-register reads into scalar ops
+      .Case<V_ACCVGPR_READ_B32>(
+          [&](V_ACCVGPR_READ_B32 readOp) -> std::optional<std::string> {
+            Value dst = readOp.getDst();
+            Value src = readOp.getSrc();
+            int64_t dstSize = getRegSize(dst.getType());
+            int64_t srcSize = getRegSize(src.getType());
+            int64_t size = std::max(dstSize, srcSize);
+            if (size <= 1) {
+              return emitDefaultFormat(readOp, "v_accvgpr_read_b32");
+            }
+            int64_t dstBase = -1, srcBase = -1;
+            if (auto pv = dyn_cast<PVRegType>(dst.getType()))
+              dstBase = pv.getIndex();
+            else if (isVirtualRegType(dst.getType()))
+              dstBase = mapping.getPhysReg(dst);
+            if (auto pa = dyn_cast<PARegType>(src.getType()))
+              srcBase = pa.getIndex();
+            else if (isVirtualRegType(src.getType()))
+              srcBase = mapping.getPhysReg(src);
+            if (dstBase < 0 || srcBase < 0) {
+              readOp.emitError(
+                  "V_ACCVGPR_READ_B32: cannot resolve base registers for "
+                  "multi-register unroll (dstBase=")
+                  << dstBase << " srcBase=" << srcBase << ")";
+              return std::nullopt;
+            }
+            std::string lines;
+            for (int64_t i = 0; i < size; ++i) {
+              if (i > 0)
+                lines += "\n";
+              lines += "  v_accvgpr_read_b32 v" + std::to_string(dstBase + i) +
+                       ", a" + std::to_string(srcBase + i);
+            }
+            return lines;
           })
 
       // Carry ops: on GFX9, carry-out is implicit VCC.

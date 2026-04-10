@@ -15,6 +15,7 @@
 
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -1286,6 +1287,92 @@ LogicalResult handleReadFirstLane(Operation *op, TranslationContext &ctx) {
   auto result = V_READFIRSTLANE_B32::create(builder, loc, sregType, *src);
   ctx.getMapper().mapValue(op->getResult(0), result);
 
+  return success();
+}
+
+LogicalResult handlePermlane16Swap(Operation *op, TranslationContext &ctx) {
+  auto swapOp = cast<ROCDL::Permlane16SwapOp>(op);
+  auto &builder = ctx.getBuilder();
+  auto loc = op->getLoc();
+
+  auto src = ctx.getMapper().getMapped(swapOp.getSrc());
+  if (!src) {
+    return op->emitError("permlane16_swap source not mapped");
+  }
+
+  // Check whether downstream code extracts element [1] (partner's old_dst).
+  // If so, we need the dual-output pair op to properly model both hardware
+  // outputs in SSA.  Otherwise, the single-output op with the mapValue
+  // workaround suffices (and avoids extra scratch register traffic).
+  bool needsBothElements = false;
+  for (auto user : swapOp.getRes().getUsers()) {
+    if (auto ev = dyn_cast<LLVM::ExtractValueOp>(user)) {
+      if (!ev.getPosition().empty() && ev.getPosition()[0] == 1) {
+        needsBothElements = true;
+        break;
+      }
+    }
+  }
+
+  if (needsBothElements) {
+    // --- Dual-output pair path ---
+    // Both old_dst and src are explicit inputs; both new_dst and new_src
+    // are explicit outputs.  The assembly emitter uses scratch VGPRs to
+    // execute the swap without clobbering either input.
+    auto oldDst = ctx.getMapper().getMapped(swapOp.getOld());
+    if (!oldDst) {
+      return op->emitError("permlane16_swap old_dst not mapped");
+    }
+
+    Value oldDstVal = ensureVGPR(*oldDst, ctx, builder, loc);
+    Value srcVal = ensureVGPR(*src, ctx, builder, loc);
+
+    auto dstType = ctx.createVRegType();
+    auto srcType = ctx.createVRegType();
+    auto pairOp = V_PERMLANE16_SWAP_B32_PAIR::create(
+        builder, loc, dstType, srcType, oldDstVal, srcVal);
+    Value newDst = pairOp.getNewDst();
+    Value newSrc = pairOp.getNewSrc();
+
+    ctx.getMapper().mapValue(swapOp.getRes(), newDst);
+    ctx.getMapper().setExtraMapping(swapOp.getRes(), 0, newDst);
+    ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, newSrc);
+
+    return success();
+  }
+
+  // --- Single-output path (original handler) ---
+  Value srcVal = ensureVGPR(*src, ctx, builder, loc);
+
+  Value srcCopy = V_MOV_B32::create(builder, loc, ctx.createVRegType(), srcVal);
+  auto dstType = ctx.createVRegType();
+  Value swapped = V_PERMLANE16_SWAP_B32::create(builder, loc, dstType, srcVal);
+
+  ctx.getMapper().mapValue(swapOp.getSrc(), srcCopy);
+
+  ctx.getMapper().mapValue(swapOp.getRes(), swapped);
+  ctx.getMapper().setExtraMapping(swapOp.getRes(), 0, swapped);
+  ctx.getMapper().setExtraMapping(swapOp.getRes(), 1, srcCopy);
+
+  return success();
+}
+
+LogicalResult handleLLVMExtractValue(Operation *op, TranslationContext &ctx) {
+  auto extractOp = cast<LLVM::ExtractValueOp>(op);
+
+  auto position = extractOp.getPosition();
+  if (position.size() != 1) {
+    return op->emitError("only single-level extractvalue supported");
+  }
+  int64_t idx = position[0];
+
+  Value container = extractOp.getContainer();
+  auto elem = ctx.getMapper().getExtraMapping(container, idx);
+  if (!elem) {
+    return op->emitError("extractvalue element ") << idx << " not mapped";
+  }
+
+  ctx.getMapper().mapValue(extractOp.getResult(), *elem);
   return success();
 }
 

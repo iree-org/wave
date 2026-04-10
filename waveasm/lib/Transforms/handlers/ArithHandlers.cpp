@@ -327,6 +327,15 @@ LogicalResult handleArithTruncI(Operation *op, TranslationContext &ctx) {
   return success();
 }
 
+LogicalResult handleArithBitcast(Operation *op, TranslationContext &ctx) {
+  auto castOp = cast<arith::BitcastOp>(op);
+  auto src = ctx.getMapper().getMapped(castOp.getIn());
+  if (src) {
+    ctx.getMapper().mapValue(castOp.getResult(), *src);
+  }
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Comparison and Select Operations
 //===----------------------------------------------------------------------===//
@@ -451,8 +460,12 @@ LogicalResult handleArithSelect(Operation *op, TranslationContext &ctx) {
   Value zeroConst = createImmConst(0, builder, loc, ctx);
   V_CMP_NE_U32::create(builder, loc, *cond, zeroConst);
 
+  // v_cndmask_b32 requires VGPR sources — move from AGPR if needed.
+  Value trueV = ensureVGPR(*trueVal, ctx, builder, loc);
+  Value falseV = ensureVGPR(*falseVal, ctx, builder, loc);
+
   auto result =
-      V_CNDMASK_B32::create(builder, loc, vregType, *falseVal, *trueVal, *cond);
+      V_CNDMASK_B32::create(builder, loc, vregType, falseV, trueV, *cond);
   ctx.getMapper().mapValue(selectOp.getResult(), result);
   return success();
 }
@@ -540,14 +553,14 @@ LogicalResult handleArithTruncF(Operation *op, TranslationContext &ctx) {
   int64_t numElems = vecType ? vecType.getNumElements() : 1;
 
   if (numElems > 1) {
+    // Multi-element truncf: pass through the source register mapping.
+    // The actual bf16 conversion (v_cvt_pk_bf16_f32) is deferred to the
+    // store handler in TranslateFromMLIR, which has the context to decide
+    // whether elements are extracted individually (non-wide-stores) or
+    // packed into dwordx4 (wide-stores).
     ctx.getMapper().mapValue(truncOp.getResult(), *src);
   } else {
-    Value srcVal = *src;
-    // VALU conversion instructions cannot read from AGPR.
-    if (isAGPRType(srcVal.getType())) {
-      auto vregTmp = ctx.createVRegType();
-      srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
-    }
+    Value srcVal = ensureVGPR(*src, ctx, builder, loc);
     auto vregType = ctx.createVRegType();
     Value result;
     if (srcElemType.isF32() && dstElemType.isBF16()) {
@@ -575,12 +588,7 @@ LogicalResult handleArithExtF(Operation *op, TranslationContext &ctx) {
   Type srcElemType = getElementTypeOrSelf(extOp.getIn().getType());
   Type dstElemType = getElementTypeOrSelf(extOp.getResult().getType());
 
-  Value srcVal = *src;
-  // VALU conversion instructions cannot read from AGPR.
-  if (isAGPRType(srcVal.getType())) {
-    auto vregTmp = ctx.createVRegType();
-    srcVal = V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, srcVal);
-  }
+  Value srcVal = ensureVGPR(*src, ctx, builder, loc);
 
   auto vregType = ctx.createVRegType();
   Value result;

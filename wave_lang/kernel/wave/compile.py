@@ -530,6 +530,10 @@ def build_graph_passes(
         partial(decompose_topk_ops, trace, launchable.constraints),
     ]
 
+    # Tags bf16 global writes that use source/target transposition
+    # (wide_stores layout) with _permlane_pack_global so the codegen emits
+    # v_permlane16_swap_b32 + buffer_store_dwordx4.  Runs unconditionally;
+    # writes without source/target are left untouched.
     from .wide_store_coalescing import coalesce_wide_stores
 
     graph_passes.append(partial(coalesce_wide_stores, trace))
@@ -1333,6 +1337,11 @@ def _generate_asm_code(mb, options):
     ) as mlir_file:
         mlir_file.write(kernel_mlir)
         mlir_path = mlir_file.name
+
+    # DEBUG: save a copy of the MLIR IR for inspection
+    import shutil as _shutil
+
+    _shutil.copy2(mlir_path, "/tmp/waveasm_input.mlir")
 
     try:
         base_passes = [

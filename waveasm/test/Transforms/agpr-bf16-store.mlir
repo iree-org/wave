@@ -61,7 +61,10 @@ module {
       // The AGPR data must be moved to VGPR before the VALU bf16 conversion.
       %bf16_result = arith.truncf %result : vector<4xf32> to vector<4xbf16>
 
-      // CHECK: v_accvgpr_read_b32 v[{{[0-9]+}}:{{[0-9]+}}], a[{{[0-9]+}}:{{[0-9]+}}]
+      // CHECK: v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
+      // CHECK: v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
+      // CHECK: v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
+      // CHECK: v_accvgpr_read_b32 v{{[0-9]+}}, a{{[0-9]+}}
       // CHECK: v_cvt_pk_bf16_f32 v{{[0-9]+}}, v{{[0-9]+}}, v{{[0-9]+}}
       // CHECK: v_cvt_pk_bf16_f32 v{{[0-9]+}}, v{{[0-9]+}}, v{{[0-9]+}}
       // CHECK: buffer_store_dwordx2
