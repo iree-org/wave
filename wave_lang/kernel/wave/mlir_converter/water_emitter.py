@@ -1611,6 +1611,7 @@ def _build_response(
     options: WaveCompileOptions,
     pipeline: str = "",
     test_diagnostics: WaterDiagTestingMode = WaterDiagTestingMode.NO,
+    print_local_scope: bool = False,
 ) -> bytes:
     """Core conversion logic that returns the dill-serialized response bytes.
 
@@ -1671,7 +1672,10 @@ def _build_response(
             )
 
         if options.print_mlir_before_water:
-            print(module.operation.get_asm(), file=sys.stderr)
+            print(
+                module.operation.get_asm(use_local_scope=print_local_scope),
+                file=sys.stderr,
+            )
 
         # If a transform script was provided, parse and apply it to the module.
         # This expects a transform module with a named sequence as first operation.
@@ -1698,7 +1702,9 @@ def _build_response(
                     WaterError(message=f"Failed to apply transform script: {e}")
                 )
 
-        module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
+        module_str = module.operation.get_asm(
+            enable_debug_info=enable_debug_info, use_local_scope=print_local_scope
+        )
         if options.print_mlir_after_water:
             print(module_str, file=sys.stderr)
 
@@ -1762,7 +1768,9 @@ def _build_response(
                 if "index" not in inferred_attribute:
                     raise RuntimeError(f"Index not inferred for water id {water_id}.")
 
-        module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
+        module_str = module.operation.get_asm(
+            enable_debug_info=enable_debug_info, use_local_scope=print_local_scope
+        )
         return _serialize_response(module_str, diagnostics, inferred_attributes)
 
 
@@ -1828,6 +1836,7 @@ def _server_mode() -> None:
         options = request.get("options", WaveCompileOptions())
         pipeline = request.get("pipeline", "")
         test_diags = request.get("test_diagnostic_emission", WaterDiagTestingMode.NO)
+        print_local_scope = request.get("print_local_scope", False)
 
         if not isinstance(trace, CapturedTrace):
             response_data = _serialize_response(
@@ -1842,7 +1851,7 @@ def _server_mode() -> None:
 
         try:
             response_data = _build_response(
-                trace, constraints, options, pipeline, test_diags
+                trace, constraints, options, pipeline, test_diags, print_local_scope
             )
         except Exception as e:
             response_data = _serialize_response("", [WaterError(message=str(e))], None)

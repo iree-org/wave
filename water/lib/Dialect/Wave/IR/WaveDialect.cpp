@@ -35,7 +35,7 @@ struct WaveOpAsmDialectInterface : public OpAsmDialectInterface {
 
   AliasResult getAlias(Attribute attr, raw_ostream &os) const override {
     if (isa<wave::WaveIndexMappingAttr>(attr)) {
-      os << "wim";
+      os << "idxmap";
       return AliasResult::OverridableAlias;
     }
     return AliasResult::NoAlias;

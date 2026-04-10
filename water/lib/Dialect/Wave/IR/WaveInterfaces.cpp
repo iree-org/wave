@@ -232,67 +232,6 @@ LogicalResult wave::verifyWaveIndexMappings(Operation *op) {
 // Custom printing/parsing components
 //-----------------------------------------------------------------------------
 
-// ODS custom directive: parseWaveIndexDict/printWaveIndexDict
-ParseResult wave::parseWaveIndexDict(OpAsmParser &parser, ArrayAttr &out) {
-  auto parseSingleMapping =
-      [&](wave::WaveSymbolMappingAttr &out) -> ParseResult {
-    SmallVector<std::pair<wave::WaveSymbolAttr, Attribute>> entries;
-    MLIRContext *ctx = parser.getContext();
-    auto parseEntry = [&]() -> ParseResult {
-      StringRef symbolName;
-      if (parser.parseKeyword(&symbolName) || parser.parseColon())
-        return failure();
-      WaveIndexMappingAttr mapping;
-      if (failed(parser.parseCustomAttributeWithFallback(mapping)))
-        return failure();
-      entries.emplace_back(wave::WaveSymbolAttr::get(ctx, symbolName), mapping);
-      return success();
-    };
-    if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Braces,
-                                       parseEntry))
-      return failure();
-    out = wave::WaveSymbolMappingAttr::get(ctx, entries);
-    return success();
-  };
-
-  SmallVector<Attribute> mappings;
-  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square,
-                                     [&]() -> ParseResult {
-                                       wave::WaveSymbolMappingAttr mapping;
-                                       if (failed(parseSingleMapping(mapping)))
-                                         return failure();
-                                       mappings.push_back(mapping);
-                                       return success();
-                                     }))
-    return failure();
-  out = parser.getBuilder().getArrayAttr(mappings);
-  return success();
-}
-
-void wave::printWaveIndexDict(OpAsmPrinter &printer, Operation *op,
-                              ArrayAttr arr) {
-  auto printOne = [&](wave::WaveSymbolMappingAttr mapping) {
-    printer.getStream() << "{";
-    llvm::interleaveComma(
-        mapping.getMapping(), printer.getStream(), [&](auto pair) {
-          auto [key, value] = pair;
-          printer.getStream() << key.getName() << " : ";
-          if (auto mappingAttr =
-                  llvm::dyn_cast<wave::WaveIndexMappingAttr>(value)) {
-            mappingAttr.print(printer);
-          } else {
-            printer.printAttribute(value);
-          }
-        });
-    printer.getStream() << "}";
-  };
-  printer.getStream() << "[";
-  llvm::interleaveComma(arr, printer.getStream(), [&](Attribute a) {
-    printOne(llvm::cast<wave::WaveSymbolMappingAttr>(a));
-  });
-  printer.getStream() << "]";
-}
-
 // ODS custom directive: parseWaveVectorShapeDictList /
 // printWaveVectorShapeDictList
 ParseResult wave::parseWaveVectorShapeDictList(OpAsmParser &parser,

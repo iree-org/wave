@@ -257,6 +257,7 @@ def _prepare_water_request(
     options: WaveCompileOptions,
     test_diagnostic_emission: WaterDiagTestingMode = WaterDiagTestingMode.NO,
     pipeline: str = "",
+    print_local_scope: bool = False,
 ) -> bytes:
     """Build and serialize a water_emitter request.
 
@@ -281,6 +282,7 @@ def _prepare_water_request(
             "options": options,
             "pipeline": pipeline,
             "test_diagnostic_emission": test_diagnostic_emission,
+            "print_local_scope": print_local_scope,
         }
     )
 
@@ -408,10 +410,17 @@ class PersistentEmitter:
         options: WaveCompileOptions,
         test_diagnostic_emission: WaterDiagTestingMode = WaterDiagTestingMode.NO,
         pipeline: str = "",
+        *,
+        print_local_scope: bool = False,
     ) -> tuple[str, list[MLIRDiagnostic | WaterError], dict[str, dict[str, Any]]]:
         """Emit Wave MLIR from a traced FX graph."""
         request = _prepare_water_request(
-            trace, constraints, options, test_diagnostic_emission, pipeline
+            trace,
+            constraints,
+            options,
+            test_diagnostic_emission,
+            pipeline,
+            print_local_scope,
         )
         with self._lock:
             proc = self._get_water_proc()

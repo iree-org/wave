@@ -594,7 +594,9 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
         return Module.parse(result)
 
 
-def apply_water_middle_end_passes(mlir_text: str) -> str:
+def apply_water_middle_end_passes(
+    mlir_text: str, *, print_local_scope: bool = False
+) -> str:
     """Apply Water middle-end pipeline using subprocess water-opt.
 
     Uses the named ``water-middle-end-lowering`` pipeline registered in
@@ -614,12 +616,15 @@ def apply_water_middle_end_passes(mlir_text: str) -> str:
     binary = get_water_opt()
 
     try:
+        command = [
+            binary,
+            "--allow-unregistered-dialect",
+            "--water-middle-end-lowering",
+        ]
+        if print_local_scope:
+            command.append("--mlir-print-local-scope")
         result = subprocess.check_output(
-            [
-                binary,
-                "--allow-unregistered-dialect",
-                "--water-middle-end-lowering",
-            ],
+            command,
             input=mlir_text,
             text=True,
         )

@@ -226,7 +226,9 @@ module {
   func.func private @overridden_mlir()
 }"""
     emitted, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
-    assert len(diagnostics) == 0, "Did not expect errors in overridden IR."
+    if len(diagnostics) != 0:
+        print(format_diagnostics(diagnostics, use_color=True), file=sys.stderr)
+        raise AssertionError("Did not expect errors in overridden IR.")
 
     # CHECK: func.func private @overridden_mlir()
     print(emitted)
@@ -288,7 +290,9 @@ def mlir_converter_matrix_add():
     constraints = matrix_add.constraints
 
     # Use the mlir_converter to emit wave MLIR dialect
-    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, constraints, options, print_local_scope=True
+    )
 
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
@@ -300,7 +304,7 @@ def mlir_converter_matrix_add():
     print(mlir_output)
 
     # Apply Water middle-end pipeline.
-    lowered_mlir = apply_water_middle_end_passes(mlir_output)
+    lowered_mlir = apply_water_middle_end_passes(mlir_output, print_local_scope=True)
     print(lowered_mlir)
 
     # CHECK-LABEL: mlir_converter_matrix_add
@@ -318,8 +322,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_A:.*]] = wave.read %[[ARG0]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
+    # CHECK-SAME: @M = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: @N = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
@@ -329,8 +333,8 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[READ_B:.*]] = wave.read %[[ARG1]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
+    # CHECK-SAME: @M = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: @N = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
@@ -340,20 +344,20 @@ def mlir_converter_matrix_add():
 
     # CHECK: %[[ADD:.*]] = wave.add %[[READ_A]], %[[READ_B]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
+    # CHECK-SAME: @M = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: @N = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: (!wave.tensor<[@M, @N] of f16, <register>>, !wave.tensor<[@M, @N] of f16, <register>>) -> !wave.tensor<[@M, @N] of f16, <register>>
 
     # CHECK: %[[CAST:.*]] = wave.cast %[[ADD]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
+    # CHECK-SAME: @M = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: @N = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: : !wave.tensor<[@M, @N] of f16, <register>> to !wave.tensor<[@M, @N] of f32, <register>>
 
     # CHECK: wave.write %[[CAST]], %[[ARG2]]
     # CHECK-SAME: index
-    # CHECK-SAME: M : <[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
-    # CHECK-SAME: N : <[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
+    # CHECK-SAME: @M = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 1, 64)>
+    # CHECK-SAME: @N = #wave.index_mapping<[{{.*}}, {{.*}}] -> ({{.*}}, 32, 1)>
     # CHECK-SAME: bounds
     # CHECK-SAME: #wave.symbol_mapping
     # CHECK-SAME: @M = #wave.expr_list
@@ -445,7 +449,9 @@ def mlir_converter_self_index():
     trace = compiled_kernel.get_compiled_graph()
     constraints = self_index.constraints
 
-    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(trace, constraints, options)
+    mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
+        trace, constraints, options, print_local_scope=True
+    )
     if diagnostics:
         print(format_diagnostics(diagnostics, use_color=False), file=sys.stderr)
     assert (
@@ -454,7 +460,7 @@ def mlir_converter_self_index():
     print(mlir_output)
 
     # CHECK-LABEL: mlir_converter_self_index
-    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [{M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 64 + T0 mod 64, 1, 1)>}] vector_shape [#wave.symbol_mapping<@M = 64 : i64>] : !wave.tensor<[@M] of i32, <register>>
+    # CHECK: %[[SELF_INDEX:.*]] = wave.self_index @M index [#wave.symbol_mapping<@M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 64 + T0 mod 64, 1, 1)>>] vector_shape [#wave.symbol_mapping<@M = 64 : i64>] : !wave.tensor<[@M] of i32, <register>>
     # CHECK: wave.write %[[SELF_INDEX]]
 
 
@@ -1165,7 +1171,11 @@ def mlir_converter_matmul():
     # Use the mlir_converter to emit wave MLIR dialect and apply the empty
     # pipeline.
     mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
-        trace, constraints, options, pipeline=pipeline_asm
+        trace,
+        constraints,
+        options,
+        pipeline=pipeline_asm,
+        print_local_scope=True,
     )
 
     if diagnostics:
@@ -1211,7 +1221,7 @@ def mlir_converter_matmul():
     #
     # CHECK-NEXT: %[[ALLOCATE_1:.*]] = wave.allocate in %[[ALLOCATE]] : !wave.tensor<{{.*}} of i8, <shared>>
     # CHECK-SAME: index [
-    # CHECK-SAME: K : <
+    # CHECK-SAME: @K = #wave.index_mapping
     # CHECK-NOT:  ARGK
     # CHECK-SAME: distributed_shape
     # CHECK-SAME: offset =
@@ -1241,12 +1251,12 @@ def mlir_converter_matmul():
     # CHECK-NEXT:     %[[READ_SHARED_B_2:.*]] = wave.read %[[ALLOCATE_2]]
     # CHECK-NEXT:     %[[READ_SHARED_B_3:.*]] = wave.read %[[ALLOCATE_2]]
     # CHECK-NEXT:     %[[MMA_0:.*]] = wave.mma %[[READ_SHARED_B_0]], %[[READ_SHARED_A_0]], %[[ARG3]]
-    # CHECK-SAME:     {M : <[
-    # CHECK-SAME:      K : <[
-    # CHECK-SAME:     {N : <[
-    # CHECK-SAME:      K : <[
-    # CHECK-SAME:     {M : <[
-    # CHECK-SAME:      N : <[
+    # CHECK-SAME:     <@M = #wave.index_mapping
+    # CHECK-SAME:      @K = #wave.index_mapping
+    # CHECK-SAME:     <@N = #wave.index_mapping
+    # CHECK-SAME:      @K = #wave.index_mapping
+    # CHECK-SAME:     <@M = #wave.index_mapping
+    # CHECK-SAME:      @N = #wave.index_mapping
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
     # CHECK-NEXT:     %[[MMA_1:.*]] = wave.mma %[[READ_SHARED_B_1]], %[[READ_SHARED_A_1]], %[[MMA_0]]
     # CHECK-SAME:     #wave.mma_kind<f32_32x32x8_f16>
@@ -1335,7 +1345,7 @@ def mlir_converter_attention():
 
     with Context(), Location.unknown():
         mlir_output, diagnostics, _ = emitter.emit_wave_dialect(
-            trace, constraints, options
+            trace, constraints, options, print_local_scope=True
         )
 
     assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
@@ -1348,10 +1358,26 @@ def mlir_converter_attention():
 
     # CHECK-LABEL: mlir_converter_attention
     # CHECK: wave.allocate {distributed_shape = #wave.expr_list<[] -> (17408)>} : !wave.tensor<[@B, @N, @K2, @K1] of i8, <shared>>
-    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64, 4, 16)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>}] {{.*}} : !wave.tensor<[@B, @N, @M] of f32, <register>>
-    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 16, 4, 16)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>}] {{.*}} : !wave.tensor<[@B, @N, @M] of f32, <register>>
-    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 32, 4, 16)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>}] {{.*}} : !wave.tensor<[@B, @N, @M] of f32, <register>>
-    # CHECK: wave.register {{.*}} [{B : <[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>, N : <[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 48, 4, 16)>, M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>}] {{.*}} : !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register
+    # CHECK-SAME: @B = #wave.index_mapping<[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>
+    # CHECK-SAME: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64, 4, 16)>
+    # CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>>
+    # CHECK-SAME: !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register
+    # CHECK-SAME: @B = #wave.index_mapping<[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>
+    # CHECK-SAME: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 16, 4, 16)>
+    # CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>>
+    # CHECK-SAME: !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register
+    # CHECK-SAME: @B = #wave.index_mapping<[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>
+    # CHECK-SAME: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 32, 4, 16)>
+    # CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>>
+    # CHECK-SAME: !wave.tensor<[@B, @N, @M] of f32, <register>>
+    # CHECK: wave.register
+    # CHECK-SAME: @B = #wave.index_mapping<[#wave.index_symbol<WG2>] -> (WG2, 1, 1)>
+    # CHECK-SAME: @N = #wave.index_mapping<[#wave.index_symbol<WG1>, #wave.index_symbol<T0>, #wave.index_symbol<T1>] -> (((T0 mod 64) floordiv 16) * 4 + T1 * 64 + WG1 * 64 + 48, 4, 16)>
+    # CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> ((T0 floordiv 64) * 32 + WG0 * 128 + T0 mod 16, 1, 1)>>
+    # CHECK-SAME: !wave.tensor<[@B, @N, @M] of f32, <register>>
     # CHECK-COUNT-4: wave.register {{.*}} !wave.tensor<[@B, @N, @M] of f32, <register>>
     # CHECK-COUNT-4: wave.register {{.*}} !wave.tensor<[@B, @M] of f32, <register>>
     # CHECK-COUNT-3: wave.register {{.*}} !wave.tensor<[@B, @M, @K2] of f32, <register>>
