@@ -1177,7 +1177,7 @@ static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
   ctx.getMapper().mapValue(op.getInductionVar(), bodyBlock.getArgument(0));
 
   // Map iter_args (block args 1..N).
-  for (unsigned i = 0; i < op.getInitArgs().size(); ++i)
+  for (auto i : llvm::seq(op.getInitArgs().size()))
     ctx.getMapper().mapValue(op.getRegionIterArgs()[i],
                              bodyBlock.getArgument(i + 1));
 
@@ -1213,7 +1213,7 @@ static LogicalResult handleSCFFor(scf::ForOp op, LLVMTranslationState &st) {
 
   // Map loop results. scf.for results are iter_args only (no IV),
   // but waveasm.loop results include the IV at index 0.
-  for (unsigned i = 0; i < op.getNumResults(); ++i)
+  for (auto i : llvm::seq(op.getNumResults()))
     ctx.getMapper().mapValue(op.getResult(i), loopOp.getResult(i + 1));
 
   return success();
