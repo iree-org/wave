@@ -385,8 +385,6 @@ def WAVEASMLLVMSDivSRemLegalization
     translation changes the abstraction level, and makes the rewrite
     independently testable.
   }];
-
-  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
 }
 
 def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm"> {
@@ -400,8 +398,6 @@ def WAVEASMTranslateFromLLVM : Pass<"waveasm-translate-from-llvm"> {
     Option<"targetArch", "target", "std::string", "\"gfx950\"",
            "Target GPU architecture">
   ];
-
-  let dependentDialects = ["::waveasm::WaveASMDialect"];
 }
 
 #endif // WaveASM_TRANSFORMS_PASSES

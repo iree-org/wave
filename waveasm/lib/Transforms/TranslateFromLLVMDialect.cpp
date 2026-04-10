@@ -243,8 +243,8 @@ static unsigned getLLVMAddrSpace(Value v) {
   return 0;
 }
 
-/// WaveASM register sizes are tracked in 32-bit lanes (dwords).
-static int64_t getWaveASMLaneCount(int64_t bitWidth) {
+/// WaveASM register sizes are tracked in 32-bit dwords.
+static int64_t getWaveASMDwordCount(int64_t bitWidth) {
   return llvm::divideCeil(bitWidth, int64_t{32});
 }
 
@@ -253,21 +253,18 @@ static int64_t getWaveASMLaneCount(int64_t bitWidth) {
 ///
 /// We intentionally support only scalars, fixed vectors, and arrays thereof.
 /// Nested aggregates such as structs require real DataLayout-based layout
-/// reasoning; approximating them here would make GEP and LDS offsets
-/// target-dependent in subtle ways.
-static FailureOr<int64_t> getLLVMTypeBytesWithoutDataLayout(Type ty) {
+/// reasoning.
+static FailureOr<int64_t> getLLVMTypeBytes(Type ty) {
   if (ty.isIntOrFloat())
     return ty.getIntOrFloatBitWidth() / 8;
   if (VectorType vecTy = dyn_cast<VectorType>(ty)) {
-    FailureOr<int64_t> elemBytes =
-        getLLVMTypeBytesWithoutDataLayout(vecTy.getElementType());
+    FailureOr<int64_t> elemBytes = getLLVMTypeBytes(vecTy.getElementType());
     if (failed(elemBytes))
       return failure();
     return *elemBytes * vecTy.getNumElements();
   }
   if (LLVM::LLVMArrayType arrTy = dyn_cast<LLVM::LLVMArrayType>(ty)) {
-    FailureOr<int64_t> elemBytes =
-        getLLVMTypeBytesWithoutDataLayout(arrTy.getElementType());
+    FailureOr<int64_t> elemBytes = getLLVMTypeBytes(arrTy.getElementType());
     if (failed(elemBytes))
       return failure();
     return *elemBytes * arrTy.getNumElements();
@@ -279,9 +276,8 @@ static FailureOr<int64_t> getLLVMTypeBytesWithoutDataLayout(Type ty) {
 static bool isZeroGEPIndex(llvm::PointerUnion<IntegerAttr, Value> idx) {
   if (Value value = dyn_cast<Value>(idx))
     return isConstantIntValue(value, 0);
-  IntegerAttr intAttr = dyn_cast<IntegerAttr>(idx);
-  assert(intAttr && "GEP index must be a Value or IntegerAttr");
-  return isConstantIntValue(intAttr, 0);
+
+  return isConstantIntValue(cast<IntegerAttr>(idx), 0);
 }
 
 /// Structural GEPs like [0, 0] are a no-op and can be forwarded even though we
@@ -304,8 +300,7 @@ static FailureOr<Value> computeGEPByteOffset(LLVM::GEPOp op,
   if (indices.size() != 1)
     return op->emitOpError("GEP byte offset requires a single index");
 
-  FailureOr<int64_t> elemBytes =
-      getLLVMTypeBytesWithoutDataLayout(op.getElemType());
+  FailureOr<int64_t> elemBytes = getLLVMTypeBytes(op.getElemType());
   if (failed(elemBytes))
     return op->emitOpError(
                "unsupported GEP element type for byte offset computation "
@@ -485,8 +480,9 @@ static LogicalResult handleWorkgroupId(OpTy op, LLVMTranslationState &st,
 }
 
 /// Translate an LLVM cast op to a WaveASM arithmetic pseudo-op.
-/// Width is derived from the LLVM result type so that sext i32->i64
-/// produces a 2-wide register and trunc i64->i32 produces a 1-wide one.
+/// Result width is derived from the LLVM type in 32-bit dwords, so sext
+/// i32->i64 produces a 2-wide register and trunc i64->i32 produces a 1-wide
+/// one.
 template <typename LLVMOp, typename WaveASMOp>
 static LogicalResult handleCastOp(LLVMOp op, LLVMTranslationState &st) {
   auto &ctx = st.ctx;
@@ -496,7 +492,7 @@ static LogicalResult handleCastOp(LLVMOp op, LLVMTranslationState &st) {
     return op->emitOpError("unmapped operand in cast");
   int64_t width = 1;
   if (IntegerType intTy = dyn_cast<IntegerType>(op.getResult().getType()))
-    width = getWaveASMLaneCount(intTy.getWidth());
+    width = getWaveASMDwordCount(intTy.getWidth());
   Type resTy = isVGPRType(src->getType())
                    ? (Type)ctx.createVRegType(width, width)
                    : (Type)ctx.createSRegType(width, width);
@@ -915,8 +911,7 @@ static LogicalResult handleAddressOf(LLVM::AddressOfOp op,
         "llvm.mlir.addressof currently supports only LDS globals in "
         "addrspace(3)");
 
-  FailureOr<int64_t> sizeBytes =
-      getLLVMTypeBytesWithoutDataLayout(global.getType());
+  FailureOr<int64_t> sizeBytes = getLLVMTypeBytes(global.getType());
   if (failed(sizeBytes))
     return op->emitOpError(
                "unsupported LDS global type for byte size computation "

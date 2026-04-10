@@ -58,7 +58,7 @@ static Value createI32Constant(PatternRewriter &rewriter, Location loc,
 }
 
 struct LegalizePowerOfTwoSDivPattern : OpRewritePattern<LLVM::SDivOp> {
-  using OpRewritePattern<LLVM::SDivOp>::OpRewritePattern;
+  using Base::Base;
 
   LogicalResult matchAndRewrite(LLVM::SDivOp op,
                                 PatternRewriter &rewriter) const override {
@@ -76,13 +76,12 @@ struct LegalizePowerOfTwoSDivPattern : OpRewritePattern<LLVM::SDivOp> {
     Value zero = createI32Constant(rewriter, loc, 0);
     Value biasImm = createI32Constant(rewriter, loc, divisor - 1);
     Value shiftConst = createI32Constant(rewriter, loc, shiftAmt);
-    Value isNegative =
-        LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::slt,
-                             op.getLhs(), zero);
+    Value isNegative = LLVM::ICmpOp::create(
+        rewriter, loc, LLVM::ICmpPredicate::slt, op.getLhs(), zero);
     Value bias = LLVM::SelectOp::create(rewriter, loc, isNegative, biasImm,
                                         zero, LLVM::FastmathFlags::none);
-    Value biased = LLVM::AddOp::create(
-        rewriter, loc, op.getLhs(), bias, LLVM::IntegerOverflowFlags::none);
+    Value biased = LLVM::AddOp::create(rewriter, loc, op.getLhs(), bias,
+                                       LLVM::IntegerOverflowFlags::none);
     Value result = LLVM::AShrOp::create(rewriter, loc, biased, shiftConst,
                                         /*isExact=*/false);
     rewriter.replaceOp(op, result);
@@ -91,7 +90,7 @@ struct LegalizePowerOfTwoSDivPattern : OpRewritePattern<LLVM::SDivOp> {
 };
 
 struct LegalizePowerOfTwoSRemPattern : OpRewritePattern<LLVM::SRemOp> {
-  using OpRewritePattern<LLVM::SRemOp>::OpRewritePattern;
+  using Base::Base;
 
   LogicalResult matchAndRewrite(LLVM::SRemOp op,
                                 PatternRewriter &rewriter) const override {
@@ -109,16 +108,17 @@ struct LegalizePowerOfTwoSRemPattern : OpRewritePattern<LLVM::SRemOp> {
     Value maskConst = createI32Constant(rewriter, loc, divisor - 1);
     Value negDivisor = createI32Constant(rewriter, loc, -divisor);
     Value rawRem = LLVM::AndOp::create(rewriter, loc, op.getLhs(), maskConst);
-    Value isNegative =
-        LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::slt,
-                             op.getLhs(), zero);
-    Value isNonZero = LLVM::ICmpOp::create(rewriter, loc, LLVM::ICmpPredicate::ne,
-                                           rawRem, zero);
-    Value needsAdjust = LLVM::AndOp::create(rewriter, loc, isNegative, isNonZero);
-    Value adjust = LLVM::SelectOp::create(rewriter, loc, needsAdjust, negDivisor,
-                                          zero, LLVM::FastmathFlags::none);
-    Value result = LLVM::AddOp::create(
-        rewriter, loc, rawRem, adjust, LLVM::IntegerOverflowFlags::none);
+    Value isNegative = LLVM::ICmpOp::create(
+        rewriter, loc, LLVM::ICmpPredicate::slt, op.getLhs(), zero);
+    Value isNonZero = LLVM::ICmpOp::create(
+        rewriter, loc, LLVM::ICmpPredicate::ne, rawRem, zero);
+    Value needsAdjust =
+        LLVM::AndOp::create(rewriter, loc, isNegative, isNonZero);
+    Value adjust =
+        LLVM::SelectOp::create(rewriter, loc, needsAdjust, negDivisor, zero,
+                               LLVM::FastmathFlags::none);
+    Value result = LLVM::AddOp::create(rewriter, loc, rawRem, adjust,
+                                       LLVM::IntegerOverflowFlags::none);
     rewriter.replaceOp(op, result);
     return success();
   }
