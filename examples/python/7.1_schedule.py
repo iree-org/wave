@@ -226,7 +226,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle(
 
 
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
-    is_debug=False, shape=(8192, 6144, 8192), block=(256, 192, 256), dynamic=True
+    is_debug=False, shape=(1024, 1024, 8192), block=(256, 256, 256), dynamic=False
 ):
     """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
     A&B scales are preshuffled and read from global memory directly to VGPRs.
@@ -234,6 +234,8 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     A data is read from global memory directly to LDS.
     """
 
+    # Dynamic kernel: Mlir snippet that performs swizzle and dword stores to global memory (instead of u shorts).
+    # This optmization brings approx 7% improvement in performance.
     mlir_256x192 = """
         #map = affine_map<()[s0] -> (s0 ceildiv 256)>
         #map1 = affine_map<()[s0] -> (s0 ceildiv 192)>
@@ -2085,7 +2087,6 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
             return %20 : !hal.buffer_view
         }
         }
-
     """
     wave_shape = _get_8wave_shape_from_block(block)
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
@@ -2100,7 +2101,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     options.minimize_shared_allocs = False
     options.linearize_shared_access = True
     options.wave_runtime = True
-    options.override_mlir = mlir_256x192
+    # options.override_mlir = mlir_256x192
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
@@ -2122,6 +2123,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
 
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
+    print(gemm.asm)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True, output_dtype=torch.bfloat16)
     mode = "dynamic" if dynamic else "static"
