@@ -909,6 +909,11 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
         q_final = arith_d.subi(q_i32, corr)
         d_or_zero = arith_d.select(too_big, d_i32, c0_i32)
         r_final = arith_d.addi(r_i32, d_or_zero)
+        # Guard: when d == 1 the magic number overflows i32 to 0,
+        # so fall back to the trivial n // 1 = n, n % 1 = 0.
+        d_is_one = arith_d.cmpi(arith_d.CmpIPredicate.eq, d_i32, c1_i32)
+        q_final = arith_d.select(d_is_one, n_i32, q_final)
+        r_final = arith_d.select(d_is_one, c0_i32, r_final)
         q_index = arith_d.index_cast(IndexType.get(), q_final)
         r_index = arith_d.index_cast(IndexType.get(), r_final)
         return q_index, r_index
