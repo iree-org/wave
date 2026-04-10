@@ -6,11 +6,11 @@ If it fails, check the LIT counterpart for error messages. If those pass, the
 error is likely in the Python/C++ interfacing.
 """
 
-import time
 from pathlib import Path
 
 import torch
 from torch.testing import assert_close
+import triton
 
 from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
 from wave_lang.kernel.wave.constraints import MMAType, ScaledMMAType
@@ -34,141 +34,6 @@ from wave_lang.support.location_config import (
 )
 
 from tests.kernel.common.utils import require_cdna4, require_e2e, require_water_and_ee
-
-
-# def _run_matmul_water_e2e(minimize_shared_allocs: bool):
-#     """Test Water PassManager with matmul kernel and e2e execution."""
-#     from wave_lang.kernel.wave.templates.gemm import get_gemm_kernel
-
-#     m = 1024
-#     n = 5120
-#     k = 640
-
-#     gemm, hyperparams, _ = get_gemm_kernel(
-#         shape=(m, n, k),
-#         dynamic_dims=False,
-#         mfma_variant=MMAType.F32_32x32x8_F16,
-#         block_shape=(64, 64, 32),
-#         waves_per_block=(2, 2),
-#     )
-
-#     options_mlir = WaveCompileOptions(
-#         subs=hyperparams,
-#         compile_to_mlir=True,
-#         linearize_reads=False,
-#         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
-#         enforce_locations=False,
-#         minimize_shared_allocs=minimize_shared_allocs,
-#     )
-#     options_mlir = set_default_run_config(options_mlir)
-
-#     compiled_kernel = wave_compile(options_mlir, gemm)
-#     trace = compiled_kernel.compiled_graph
-#     constraints = gemm.constraints
-
-#     with PersistentEmitter() as emitter:
-#         wave_dialect_mlir, diagnostics, _ = emitter.emit_wave_dialect(
-#             trace, constraints, options_mlir
-#         )
-
-#     lowered_mlir = apply_water_middle_end_passes(wave_dialect_mlir)
-
-#     a_tensor = device_randn(m, k, dtype=torch.float16)
-#     b_tensor = device_randn(n, k, dtype=torch.float16)
-#     c_tensor = device_zeros(m, n, dtype=torch.float32)
-
-#     expected = torch.matmul(a_tensor, b_tensor.T).float()
-
-#     options_e2e = WaveCompileOptions(
-#         subs=hyperparams,
-#         canonicalize=True,
-#         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
-#         enforce_locations=False,
-#         override_mlir=lowered_mlir,
-#         minimize_shared_allocs=minimize_shared_allocs,
-#     )
-#     options_e2e = set_default_run_config(options_e2e)
-
-#     compiled_e2e = wave_compile(options_e2e, gemm)
-#     compiled_e2e(a_tensor, b_tensor, c_tensor)
-
-#     assert_close(c_tensor, expected, rtol=1e-3, atol=1e-3)
-
-
-# @require_e2e
-# @require_water_and_ee
-# def test_matmul_water_e2e():
-#     """Test matmul with separate shared memory allocations."""
-#     _run_matmul_water_e2e(minimize_shared_allocs=False)
-
-
-# @require_e2e
-# @require_water_and_ee
-# def test_matmul_water_e2e_minimize_shared_allocs():
-#     """Test matmul with minimized shared memory allocations (parent allocations)."""
-#     _run_matmul_water_e2e(minimize_shared_allocs=True)
-
-
-# @require_e2e
-# @require_water_and_ee
-# def test_attention_water():
-#     torch.manual_seed(0)
-
-#     attention, hyperparams, _ = get_vanilla_attention_kernel(
-#         AttentionShape(
-#             num_query_heads=8,
-#             num_kv_heads=2,
-#             query_seq_len=256,
-#             head_size_kv=64,
-#             head_size=64,
-#             kv_seq_len=256,
-#         ),
-#         (MMAType.F32_16x16x16_F16, MMAType.F32_16x16x16_F16),
-#         dynamic_dims=False,
-#     )
-
-#     options_mlir = WaveCompileOptions(
-#         subs=hyperparams,
-#         compile_to_mlir=True,
-#         linearize_reads=False,
-#         # TODO(#982): this pass creates IR that appears malformed, though pywave
-#         # manages to execute it.
-#         enable_mark_hardware_transpose_candidates=False,
-#     )
-#     options_mlir = set_default_run_config(options_mlir)
-#     compiled_kernel = wave_compile(options_mlir, attention)
-#     trace = compiled_kernel.compiled_graph
-#     constraints = attention.constraints
-
-#     with PersistentEmitter() as emitter:
-#         wave_dialect_mlir, diagnostics, _ = emitter.emit_wave_dialect(
-#             trace, constraints, options_mlir
-#         )
-#     assert len(diagnostics) == 0, f"Should have no diagnostics, got: {diagnostics}"
-
-#     lowered_mlir = apply_water_middle_end_passes(wave_dialect_mlir)
-
-#     options_e2e = WaveCompileOptions(
-#         subs=hyperparams,
-#         canonicalize=True,
-#         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
-#         enforce_locations=False,
-#         override_mlir=lowered_mlir,
-#         enable_mark_hardware_transpose_candidates=False,
-#     )
-#     options_e2e = set_default_run_config(options_e2e)
-#     compiled_e2e = wave_compile(options_e2e, attention)
-#     query = device_randn(8, 256, 64, dtype=torch.float16)
-#     key = device_randn(8, 256, 64, dtype=torch.float16)
-#     value = device_randn(8, 256, 64, dtype=torch.float16)
-#     output = device_zeros(8, 256, 64, dtype=torch.float32)
-#     compiled_e2e(query, key, value, output)
-
-#     expected = torch.nn.functional.scaled_dot_product_attention(
-#         query, key, value, attn_mask=None
-#     )
-
-#     assert_close(output, expected, rtol=1e-3, atol=1e-3, check_dtype=False)
 
 
 @require_e2e
@@ -237,6 +102,7 @@ def test_scaled_mma_mxfp4_water_e2e():
         location_capture_config=LocationCaptureConfig(level=LocationCaptureLevel.NONE),
         enforce_locations=False,
         dump_binaries=str(dump_wave),
+        use_global_to_shared=True,
     )
     options_wave = set_default_run_config(options_wave)
     wave_kernel = wave_compile(options_wave, scaled_gemm2)
@@ -257,42 +123,36 @@ def test_scaled_mma_mxfp4_water_e2e():
 
     wt = w.T.contiguous()
 
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
     expected = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
-    torch.cuda.synchronize()
-    print(
-        f"test_scaled_mma_mxfp4_water_e2e: torch wall time "
-        f"(synced): {(time.perf_counter() - t0) * 1000:.3f} ms"
-    )
 
     compiled_e2e(x, x_scales, wt, w_scales, out)
-    compiled_e2e(x, x_scales, wt, w_scales, out)
-    compiled_e2e(x, x_scales, wt, w_scales, out)
-    time.sleep(3)
-
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    compiled_e2e(x, x_scales, wt, w_scales, out)
-    torch.cuda.synchronize()
-    print(
-        f"test_scaled_mma_mxfp4_water_e2e: compiled_e2e wall time "
-        f"(synced): {(time.perf_counter() - t0) * 1000:.3f} ms"
-    )
-
     wave_kernel(x, x_scales, wt, w_scales, out_wave)
-    wave_kernel(x, x_scales, wt, w_scales, out_wave)
-    wave_kernel(x, x_scales, wt, w_scales, out_wave)
-    time.sleep(3)
-
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    wave_kernel(x, x_scales, wt, w_scales, out_wave)
-    torch.cuda.synchronize()
-    print(
-        f"test_scaled_mma_mxfp4_water_e2e: wave_kernel wall time "
-        f"(synced): {(time.perf_counter() - t0) * 1000:.3f} ms"
-    )
 
     assert_close(out, expected, rtol=1e-3, atol=1e-3, check_dtype=False)
     assert_close(out_wave, expected, rtol=1e-3, atol=1e-3, check_dtype=False)
+
+    # Step 4: Benchmark with triton.testing
+    @triton.testing.perf_report(
+        triton.testing.Benchmark(
+            x_names=["M", "N", "K"],
+            x_vals=[(M_val, N_val, K_val)],
+            line_arg="impl",
+            line_vals=["torch", "water_e2e", "wave_kernel"],
+            line_names=["torch (torchScaledGemmMXFP4)", "water_e2e", "wave_kernel"],
+            plot_name="scaled_gemm_mxfp4",
+            args={},
+            xlabel="(M, N, K)",
+            ylabel="ms",
+        )
+    )
+    def bench_scaled_gemm(M, N, K, impl):
+        if impl == "torch":
+            fn = lambda: torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+        elif impl == "water_e2e":
+            fn = lambda: compiled_e2e(x, x_scales, wt, w_scales, out)
+        else:
+            fn = lambda: wave_kernel(x, x_scales, wt, w_scales, out_wave)
+        ms, min_ms, max_ms = triton.testing.do_bench(fn, quantiles=[0.5, 0.2, 0.8])
+        return ms, min_ms, max_ms
+
+    bench_scaled_gemm.run(print_data=True)
