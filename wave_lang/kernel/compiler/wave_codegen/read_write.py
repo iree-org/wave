@@ -75,6 +75,7 @@ from .emitter import (
     cast_py_value,
     cast_vector,
     gen_sympy_index,
+    gen_sympy_index_hoisted,
     get_constant_attr,
     get_type_or_element_type,
     handle_op,
@@ -82,6 +83,113 @@ from .emitter import (
 from .ir_utils import (
     is_float_type,
 )
+
+
+def _get_enclosing_scf_for():
+    """Walk parent ops and return the nearest enclosing ``scf.for``, or ``None``.
+
+    Unlike checking only the immediate block owner, this handles cases
+    where the insertion point is inside a nested region (e.g. ``scf.if``
+    within an ``scf.for`` body).
+    """
+    ip = InsertionPoint.current
+    op = ip.block.owner
+    while op is not None and not isinstance(op, func_d.FuncOp):
+        if op.name == "scf.for":
+            return op
+        op = op.parent
+    return None
+
+
+def _hoist_before_loop(emitter: WaveEmitter):
+    """Return an ``InsertionPoint`` just before the enclosing ``scf.for``.
+
+    If we are not inside a loop, returns ``InsertionPoint.current`` so
+    callers can use a uniform ``with _hoist_before_loop(emitter):``
+    pattern unconditionally.
+    """
+    loop_op = _get_enclosing_scf_for()
+    if loop_op is not None:
+        return InsertionPoint(loop_op)
+    return InsertionPoint.current
+
+
+def _iv_context(emitter: WaveEmitter, expr: sympy.Expr):
+    """Return ``(iv_sym, iv_val, all_iv_syms)`` for the first IV in *expr*.
+
+    Returns ``(None, None, all_iv_syms)`` when *expr* has no IV
+    dependency.  *all_iv_syms* is always the full set of induction
+    variable symbols from the emitter, used to verify that the hoisted
+    base is truly loop-invariant.
+    """
+    iv_vals, iv_syms = emitter.get_induction_vars_and_syms()
+    all_iv_syms = set(iv_syms)
+    expanded = sympy.expand(sympy.sympify(expr))
+    for sym, val in zip(iv_syms, iv_vals):
+        if sym in expanded.free_symbols:
+            return sym, val, all_iv_syms
+    return None, None, all_iv_syms
+
+
+def _gen_linear_index_offset(
+    emitter: WaveEmitter,
+    subs_map: dict[IndexExpr, Value],
+    idx_seq: IndexSequence,
+) -> Value:
+    """Lower a LINEAR_INDEX offset, hoisting the base before the loop.
+
+    Uses ``gen_sympy_index_hoisted`` to split the expression into a
+    loop-invariant base (generated before the ``scf.for``) and a
+    loop-variant ``iv * stride`` (generated at the current insertion
+    point).
+
+    When ``idx_seq.stride`` is available from ``annotate_iv_strides``,
+    it is passed directly.  Otherwise ``gen_sympy_index_hoisted`` falls
+    back to ``sympy.expand`` / ``coeff`` extraction.
+    """
+    flat_offset = idx_seq.start
+    stride = idx_seq.stride if idx_seq.stride != sympy.Integer(1) else None
+    iv_sym, iv_val, all_iv_syms = _iv_context(emitter, flat_offset)
+    in_loop = _get_enclosing_scf_for() is not None
+    hoist_ip = _hoist_before_loop(emitter) if in_loop else None
+    return gen_sympy_index_hoisted(
+        subs_map,
+        flat_offset,
+        iv_sym=iv_sym,
+        iv_val=iv_val,
+        iv_stride=stride,
+        hoist_ip=hoist_ip,
+        all_iv_syms=all_iv_syms,
+        iv_offset_cache=emitter.iv_offset_cache,
+    )
+
+
+def _hoist_dst_indices(
+    emitter: WaveEmitter,
+    dst_idx: dict[IndexExpr, IndexSequence | IndexExpr],
+    dst_dynamic_vals_map_start: dict[IndexExpr, Value],
+) -> list[OpResult]:
+    """Build GatherToLDS dst indices, hoisting to outermost scope when IV-free."""
+    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
+    iv_free = not any(
+        induction_vars.intersection(set(_get_start_index(index).free_symbols))
+        for index in dst_idx.values()
+    )
+
+    ip = InsertionPoint.current
+    if iv_free:
+        while not isinstance(ip.block.owner, func_d.FuncOp):
+            ip = InsertionPoint(ip.block.owner)
+
+    with ip:
+        dst_index, _, _ = _build_start_indices(
+            emitter,
+            dst_idx,
+            dst_dynamic_vals_map_start,
+        )
+        i32 = IntegerType.get_signless(32)
+        dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
+    return dst_index
 
 
 def _get_start_index(i: IndexSequence | IndexExpr) -> IndexExpr:
@@ -211,7 +319,6 @@ def _build_mask(
     conditions = []
     for key, bound in bounds.items():
         if isinstance(key, sympy.Symbol) and key in index:
-            # Legacy per-dim bound.
             start = _get_start_index(index[key])
             fastest_dim = get_fastest_index(index)
             last_dim = list(index)[fastest_dim]
@@ -219,8 +326,6 @@ def _build_mask(
                 start = start + idxc.iota(elements_per_thread)
             conditions.append(start < bound)
         else:
-            # Expression-keyed bound (from flattened index).
-            # Iota already embedded in key expression.
             conditions.append(key < bound)
 
     mask_expr = functools.reduce(
@@ -689,16 +794,13 @@ def _create_vec_read_write(
     else:
         strides = [gen_sympy_index(add_emitter_subs(emitter), s) for s in stride_values]
 
-    # With the waveasm backend (non-water path), allow masked loads even
-    # with buffer ops.  The mask computation may fail to translate
-    # (vector<Nxindex> ops are unsupported), but the backend loads
-    # unconditionally in that case, relying on hardware OOB checking
-    # (SRD boundsCheck) to return zero.  The water+waveasm path goes
-    # through TranslateFromLLVMDialect which lacks vector op support,
-    # so masked loads must stay disabled there.
-    no_masked_load_store_ops = buffer_ops_enabled and (
-        emitter.options.backend != "asm" or emitter.options.use_water_backend
-    )
+    # With buffer ops and the asm backend, allow masked loads: the lowering
+    # can rely on hardware OOB (SRD validBytes / num_records) where
+    # applicable instead of forcing the no-mask path.
+    if buffer_ops_enabled and getattr(emitter.options, "backend", "llvm") == "asm":
+        no_masked_load_store_ops = False
+    else:
+        no_masked_load_store_ops = buffer_ops_enabled
 
     mask_splat = _get_splat_input(mask)
     splatted_mask = mask_splat is not None
@@ -926,30 +1028,27 @@ def _sym_strides_for_flat_memref(
     return [sympy.Integer(s) for s in phys_strides]
 
 
-def _linear_read_linearize_memref_maybe_hoisted(
+def _linearize_memref_hoisted(
     emitter: WaveEmitter,
     kb_src: Value,
     sym_strides: list[sympy.Expr],
     subs_map: dict[IndexExpr, Value],
-    element_type: IrType,
-    input_shape: tuple[IndexExpr, ...],
-    buffer_ops_enabled: bool,
-) -> Value:
-    """
-    Build a 1-D linearized memref for flattened reads; optionally hoist
-    stride materialization to the owning scf.for when inside a loop.
-    """
-    # TODO: Remove this manual hoisting once the waveasm LICM pass handles it.
-    ip = InsertionPoint.current
-    owner = ip.block.owner
-    is_in_loop = not isinstance(owner, func_d.FuncOp) and owner.name == "scf.for"
-    hoist_ip = InsertionPoint(owner) if is_in_loop else None
+    element_type: IrType | None = None,
+    input_shape: tuple[IndexExpr, ...] | None = None,
+    buffer_ops_enabled: bool = False,
+) -> tuple[Value, list[Value]]:
+    """Build a 1-D linearized memref, hoisting stride ops before the loop.
 
-    def _materialize():
+    Returns ``(linearized_src, strides_vals)``.  When *buffer_ops_enabled*
+    is ``True``, *element_type* and *input_shape* must be provided and
+    the returned memref includes the buffer-ops fat pointer encoding.
+    """
+    with _hoist_before_loop(emitter):
         strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
         zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
         src, _ = _linearize_memref(kb_src, zero_indices, zero_indices, strides_vals)
         if buffer_ops_enabled:
+            assert element_type is not None and input_shape is not None
             valid_bytes = _compute_valid_bytes(
                 src,
                 element_type,
@@ -963,14 +1062,7 @@ def _linear_read_linearize_memref_maybe_hoisted(
                 element_type,
                 valid_bytes,
             )
-        return src
-
-    if hoist_ip is not None:
-        with hoist_ip:
-            lin_src = _materialize()
-    else:
-        lin_src = _materialize()
-    return lin_src
+    return src, strides_vals
 
 
 def _linear_read_emit_global_vector_load(
@@ -1086,21 +1178,17 @@ def _handle_read_linear_index(
     ):
         subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
         sym_strides = _sym_strides_for_flat_memref(kb_src, input_shape)
-        # LINEAR_INDEX global reads default to maskedload (no buffer ops)
-        # so numerics match across IREE and wave runtime.  When
-        # eliminate_epilogue is active, OOB prefetch reads need
-        # hardware bounds checking to avoid faults.
         linear_buffer_ops = emitter.options.eliminate_epilogue
-        lin_src = _linear_read_linearize_memref_maybe_hoisted(
+        lin_src, _ = _linearize_memref_hoisted(
             emitter,
             kb_src,
             sym_strides,
             subs_map,
-            kb_ir_type.element_type,
-            input_shape,
-            linear_buffer_ops,
+            element_type=kb_ir_type.element_type,
+            input_shape=input_shape,
+            buffer_ops_enabled=linear_buffer_ops,
         )
-        total_offset = gen_sympy_index(subs_map, flat_offset)
+        total_offset = _gen_linear_index_offset(emitter, subs_map, idx_seq)
         result = _linear_read_emit_global_vector_load(
             vector_type,
             lin_src,
@@ -1115,10 +1203,13 @@ def _handle_read_linear_index(
     if is_global:
         subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
         sym_strides = _sym_strides_for_flat_memref(kb_src, input_shape)
-        strides_vals = [gen_sympy_index(subs_map, s) for s in sym_strides]
-        zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(sym_strides)
-        lin_src, _ = _linearize_memref(kb_src, zero_indices, zero_indices, strides_vals)
-        total_offset = gen_sympy_index(subs_map, flat_offset)
+        lin_src, _ = _linearize_memref_hoisted(
+            emitter,
+            kb_src,
+            sym_strides,
+            subs_map,
+        )
+        total_offset = _gen_linear_index_offset(emitter, subs_map, idx_seq)
         result = _linear_read_emit_global_vector_load_simple(
             vector_type,
             lin_src,
@@ -1129,7 +1220,7 @@ def _handle_read_linear_index(
         return
 
     subs_map = add_emitter_subs(emitter, dynamic_vals_map_start)
-    flat_idx_val = gen_sympy_index(subs_map, flat_offset)
+    flat_idx_val = _gen_linear_index_offset(emitter, subs_map, idx_seq)
     start_indices = [flat_idx_val]
     start_indices_wg = [flat_idx_val]
     start_indices_th = [arith_d.constant(IndexType.get(), 0)]
@@ -1757,8 +1848,6 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
     # --- LINEAR_INDEX fast path for flattened src_idx ---
     if LINEAR_INDEX in src_idx:
         idx_seq = src_idx[LINEAR_INDEX]
-        base_offset = idx_seq.start
-        iv_stride_val = idx_seq.stride
 
         if dst_mapping:
             dyn_vals = tuple(
@@ -1771,44 +1860,26 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             dst_dynamic_vals_map_start = _build_dyn_vals_map(dst_mapping, dyn_vals)
 
         store_type = VectorType.get((elements_per_thread,), element_type)
-        ip = InsertionPoint.current
-        induction_vars = set(emitter.get_induction_vars_and_syms()[1])
 
-        if not any(
-            induction_vars.intersection(set(index.start.free_symbols))
-            for index in dst_idx.values()
-        ):
-            while not isinstance(ip.block.owner, func_d.FuncOp):
-                ip = InsertionPoint(ip.block.owner)
-
-        with ip:
-            dst_index, _, _ = _build_start_indices(
-                emitter, dst_idx, dst_dynamic_vals_map_start
-            )
-            i32 = IntegerType.get_signless(32)
-            dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
+        dst_index = _hoist_dst_indices(
+            emitter,
+            dst_idx,
+            dst_dynamic_vals_map_start,
+        )
 
         sym_stride_vals = strides_from_symbolic_shape(
             IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
         )
         subs_map = add_emitter_subs(emitter, src_dynamic_vals_map_start)
 
-        cur_ip = InsertionPoint.current
-        owner = cur_ip.block.owner
-        is_in_loop = not isinstance(owner, func_d.FuncOp) and owner.name == "scf.for"
-        hoist_ip = InsertionPoint(owner) if is_in_loop else None
+        lin_src, strides = _linearize_memref_hoisted(
+            emitter,
+            src,
+            sym_stride_vals,
+            subs_map,
+        )
 
-        if hoist_ip is not None:
-            with hoist_ip:
-                strides = [gen_sympy_index(subs_map, s) for s in sym_stride_vals]
-                zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(strides)
-                lin_src, _ = _linearize_memref(src, zero_indices, zero_indices, strides)
-        else:
-            strides = [gen_sympy_index(subs_map, s) for s in sym_stride_vals]
-            zero_indices = [arith_d.constant(IndexType.get(), 0)] * len(strides)
-            lin_src, _ = _linearize_memref(src, zero_indices, zero_indices, strides)
-
-        src_offset = gen_sympy_index(subs_map, base_offset)
+        src_offset = _gen_linear_index_offset(emitter, subs_map, idx_seq)
 
         valid_bytes_override = None
         guard_condition = node.meta.get("g2s_guard", None)
@@ -1834,18 +1905,26 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
             ),
         )
 
-        mask = _build_mask(
-            emitter,
-            src_idx,
-            elements_per_thread=1,
-            bounds=src_bounds,
-            dynamic_values=src_dynamic_vals_map_start,
-        )
-        if mask:
-            mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
-            oob_index_value = _get_out_of_bounds_index(element_type)
-            oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-            src_offset = arith_d.select(mask, src_offset, oob_index)
+        # When the SRD validBytes encodes the real buffer size (via
+        # _compute_branchless_valid_bytes with dynamic shape), hardware
+        # num_records clamping returns 0 for OOB addresses.  Skip the
+        # per-load software mask to eliminate ~4 VALU instructions and
+        # temporary VGPRs per gather_to_lds call.
+        if valid_bytes_override is None:
+            mask = _build_mask(
+                emitter,
+                src_idx,
+                elements_per_thread=1,
+                bounds=src_bounds,
+                dynamic_values=src_dynamic_vals_map_start,
+            )
+            if mask:
+                mask = vector_d.extract(
+                    mask, static_position=[0], dynamic_position=[]
+                )
+                oob_index_value = _get_out_of_bounds_index(element_type)
+                oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+                src_offset = arith_d.select(mask, src_offset, oob_index)
 
         amdgpu_d.gather_to_lds(
             src=lin_src,
@@ -1880,23 +1959,11 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
 
     store_type = VectorType.get((elements_per_thread,), element_type)
 
-    ip = InsertionPoint.current
-
-    induction_vars = set(emitter.get_induction_vars_and_syms()[1])
-
-    if not any(
-        induction_vars.intersection(set(index.start.free_symbols))
-        for index in dst_idx.values()
-    ):
-        while not isinstance(ip.block.owner, func_d.FuncOp):
-            ip = InsertionPoint(ip.block.owner)
-
-    with ip:
-        dst_index, _, _ = _build_start_indices(
-            emitter, dst_idx, dst_dynamic_vals_map_start
-        )
-        i32 = IntegerType.get_signless(32)
-        dst_index = [assume_index_subgroup_uniform(idx, i32) for idx in dst_index]
+    dst_index = _hoist_dst_indices(
+        emitter,
+        dst_idx,
+        dst_dynamic_vals_map_start,
+    )
 
     sym_stride_vals = strides_from_symbolic_shape(
         IndexingContext.current(), src_symbolic_shape, allow_mixed_shapes=True
@@ -1929,18 +1996,24 @@ def handle_gather_to_lds(emitter: WaveEmitter, node: fx.Node):
         ),
     )
 
-    mask = _build_mask(
-        emitter,
-        src_idx,
-        elements_per_thread=1,
-        bounds=src_bounds,
-        dynamic_values=src_dynamic_vals_map_start,
-    )
-    if mask:
-        mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
-        oob_index_value = _get_out_of_bounds_index(element_type)
-        oob_index = arith_d.constant(IndexType.get(), oob_index_value)
-        src_offset = arith_d.select(mask, src_offset, oob_index)
+    # When the SRD validBytes encodes the real buffer size (via
+    # _compute_branchless_valid_bytes with dynamic shape), hardware
+    # num_records clamping returns 0 for OOB addresses.  Skip the
+    # per-load software mask to eliminate ~4 VALU instructions and
+    # temporary VGPRs per gather_to_lds call.
+    if valid_bytes_override is None:
+        mask = _build_mask(
+            emitter,
+            src_idx,
+            elements_per_thread=1,
+            bounds=src_bounds,
+            dynamic_values=src_dynamic_vals_map_start,
+        )
+        if mask:
+            mask = vector_d.extract(mask, static_position=[0], dynamic_position=[])
+            oob_index_value = _get_out_of_bounds_index(element_type)
+            oob_index = arith_d.constant(IndexType.get(), oob_index_value)
+            src_offset = arith_d.select(mask, src_offset, oob_index)
 
     amdgpu_d.gather_to_lds(
         src=lin_src,

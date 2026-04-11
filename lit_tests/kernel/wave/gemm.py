@@ -106,11 +106,11 @@ def test_gemm():
     print(gemm.asm)
 
     # CHECK-LABEL:    test_gemm
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 * 2048 + s1 * 64 + (s1 floordiv 64) * 1008 - (s1 floordiv 16) * 1020)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 2048 + s1 * 1024 + s2 * 64 - (s2 floordiv 64) * 16 - (s2 floordiv 16) * 1020)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 2048 + s1 * 64 + s2 * 16 + (s1 floordiv 64) * 1008 - (s1 floordiv 16) * 1020)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2, s3] -> (s0 * 2048 + s1 * 1024 + s2 * 64 + s3 * 16 - (s2 floordiv 64) * 16 - (s2 floordiv 16) * 1020)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
@@ -279,10 +279,10 @@ def test_reordered_gemm():
     # that the math for the final workgroup indexing matches the workgroup indexing we desire.
 
     # CHECK-LABEL:    test_reordered_gemm
-    # CHECK-DAG:        #[[MAP_LIN_A:.+]] = affine_map<()[s0, s1, s2, s3, s4] -> (s0 * 65536 + s2 * 16384 + s3 * 8 + s4 * 32 + (s1 floordiv 4) * 32768 + (s3 floordiv 4) * 480 - ((s2 * 32 + s3 floordiv 4) floordiv 64) * 32768 - ((s0 * 8 + s1) floordiv 32) * 262144)>
-    # CHECK-DAG:        #[[MAP_LIN_B:.+]] = affine_map<()[s0, s1, s2, s3, s4] -> (s0 * 32768 + s2 * 16384 + s3 * 8 + s4 * 32 + ((s0 + s1 * 8) floordiv 32) * 131072 + (s3 floordiv 4) * 480 - ((s2 * 32 + s3 floordiv 4) floordiv 64) * 32768 - (s0 floordiv 4) * 131072)>
-    # CHECK-DAG:        affine.apply #[[MAP_LIN_A]]()[%block_id_y, %block_id_x, %thread_id_y, %thread_id_x, {{.*}}]
-    # CHECK-DAG:        affine.apply #[[MAP_LIN_B]]()[%block_id_x, %block_id_y, %thread_id_y, %thread_id_x, {{.*}}]
+    # CHECK-DAG:        #[[MAP_LIN_A:.+]] = affine_map<()[s0, s1, s2, s3] -> (s0 * 65536 + s2 * 16384 + s3 * 8 + (s1 floordiv 4) * 32768 + (s3 floordiv 4) * 480 - ((s2 * 32 + s3 floordiv 4) floordiv 64) * 32768 - ((s0 * 8 + s1) floordiv 32) * 262144)>
+    # CHECK-DAG:        #[[MAP_LIN_B:.+]] = affine_map<()[s0, s1, s2, s3] -> (s0 * 32768 + s2 * 16384 + s3 * 8 + ((s0 + s1 * 8) floordiv 32) * 131072 + (s3 floordiv 4) * 480 - ((s2 * 32 + s3 floordiv 4) floordiv 64) * 32768 - (s0 floordiv 4) * 131072)>
+    # CHECK-DAG:        affine.apply #[[MAP_LIN_A]]()[%block_id_y, %block_id_x, %thread_id_y, %thread_id_x]
+    # CHECK-DAG:        affine.apply #[[MAP_LIN_B]]()[%block_id_x, %block_id_y, %thread_id_y, %thread_id_x]
     # CHECK-DAG:        vector.load {{.*}} : memref<{{.*}}xf16, strided<[1]>>, vector<8xf16>
     # CHECK-DAG:        vector.load {{.*}} : memref<{{.*}}xf16, strided<[1]>>, vector<8xf16>
     # CHECK:            amdgpu.mfma
@@ -805,8 +805,8 @@ def test_batched_gemm():
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2, s3] -> (s0 * 4096 + s1 * 2048 + s2 * 64 + s3 * 16 + (s2 floordiv 64) * 1008 - (s2 floordiv 16) * 1020)>
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2, s3, s4] -> (s0 * 8192 + s1 * 2048 + s2 * 1024 + s3 * 64 + s4 * 16 - (s3 floordiv 64) * 16 - (s3 floordiv 16) * 1020)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 4096 + s1 * 2048 + s2 * 64 + (s2 floordiv 64) * 1008 - (s2 floordiv 16) * 1020)>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2, s3] -> (s0 * 8192 + s1 * 2048 + s2 * 1024 + s3 * 64 - (s3 floordiv 64) * 16 - (s3 floordiv 16) * 1020)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:        #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
@@ -2287,7 +2287,7 @@ def test_broadcast_batched_gemm_with_vmma():
     print(broadcast_batched_gemm_with_vmma.asm)
 
     # CHECK-LABEL:    test_broadcast_batched_gemm_with_vmma
-    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2, s3] -> ({{.*}}(s0 floordiv 6){{.*}})>
+    # CHECK-DAG:        #{{.*}} = affine_map<()[s0, s1, s2] -> ({{.*}}(s0 floordiv 6){{.*}})>
     # CHECK:          func.func @broadcast_batched_gemm_with_vmma
     # CHECK-SAME:       (%[[ARG0:[a-zA-Z0-9_]+]]: !stream.binding, %[[ARG1:[a-zA-Z0-9_]+]]: !stream.binding,
     # CHECK-SAME:       %[[ARG2:[a-zA-Z0-9_]+]]: !stream.binding) attributes {translation_info = #[[TRANSLATION:.+]]} {
