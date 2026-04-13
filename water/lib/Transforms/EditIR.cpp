@@ -10,7 +10,6 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -21,8 +20,6 @@
 
 #include <cstdio>
 #include <string>
-
-#define DEBUG_TYPE "edit-ir"
 
 using namespace mlir;
 
@@ -42,11 +39,12 @@ static std::string resolveEditor(StringRef editorOverride) {
 
 /// Try to open `path` in `editorCmd`. Failures are non-fatal (the user can
 /// always open the file manually via the printed path).
-static void tryOpenInEditor(StringRef editorCmd, StringRef path) {
+static void tryOpenInEditor(StringRef editorCmd, StringRef path,
+                            Operation *op) {
   auto program = llvm::sys::findProgramByName(editorCmd);
-  if (!program) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "edit-ir: editor '" << editorCmd << "' not found in PATH\n");
+  if (std::error_code ec = program.getError()) {
+    op->emitWarning() << "could not find editor '" << editorCmd
+                      << "': " << ec.message();
     return;
   }
 
@@ -55,8 +53,7 @@ static void tryOpenInEditor(StringRef editorCmd, StringRef path) {
   llvm::sys::ExecuteNoWait(*program, args, /*Env=*/std::nullopt,
                            /*Redirects=*/{}, /*MemoryLimit=*/0, &errMsg);
   if (!errMsg.empty())
-    LLVM_DEBUG(llvm::dbgs()
-               << "edit-ir: failed to launch editor: " << errMsg << "\n");
+    op->emitWarning() << "failed to launch editor: " << errMsg;
 }
 
 LogicalResult mlir::water::editIRInteractively(Operation *op, StringRef editor,
@@ -73,7 +70,7 @@ LogicalResult mlir::water::editIRInteractively(Operation *op, StringRef editor,
 
   llvm::FileRemover tmpFileRemover(tmpPath);
 
-  {
+  { // Scope ensures the file is flushed and closed before the editor opens it.
     llvm::raw_fd_ostream tmpFile(tmpPath, ec);
     if (ec)
       return op->emitError()
@@ -86,20 +83,21 @@ LogicalResult mlir::water::editIRInteractively(Operation *op, StringRef editor,
 
   std::string editorCmd = resolveEditor(editor);
   if (!editorCmd.empty())
-    tryOpenInEditor(editorCmd, tmpPath);
+    tryOpenInEditor(editorCmd, tmpPath, op);
 
   // Prompt the user and wait for Enter (or EOF).
-  llvm::errs() << "=== mlir-edit-ir";
+  llvm::outs() << "=== water-edit-ir";
   if (!passLabel.empty())
-    llvm::errs() << " " << passLabel;
-  llvm::errs() << " ===\n"
+    llvm::outs() << " " << passLabel;
+  llvm::outs() << " ===\n"
                << "IR written to: " << tmpPath << "\n"
                << "Edit the file, then press Enter to continue "
                   "compilation...\n";
+  llvm::outs().flush();
 
   // fgets instead of std::cin to avoid pulling in <iostream> (static
-  // initializers).
-  char buf[64];
+  // initializers). Buffer only needs to hold '\n' + '\0'.
+  char buf[2];
   (void)std::fgets(buf, sizeof(buf), stdin);
 
   // Re-parse the (potentially edited) file.
@@ -115,10 +113,16 @@ LogicalResult mlir::water::editIRInteractively(Operation *op, StringRef editor,
   OwningOpRef<Operation *> parsedOp =
       parseSourceFile<Operation *>(sourceMgr, context);
   if (!parsedOp)
-    return op->emitError("failed to parse edited IR");
+    return failure(); // Parser already emitted diagnostics.
 
-  // Replace the operation's regions and attributes with the parsed content.
-  for (unsigned i = 0; i < op->getNumRegions(); ++i) {
+  if (op->getName() != (*parsedOp)->getName())
+    return op->emitError()
+           << "edited IR has a different top-level operation ('"
+           << (*parsedOp)->getName() << "' vs '" << op->getName() << "')";
+
+  // Replace the operation's regions, attributes, and properties.
+  unsigned numRegions = op->getNumRegions();
+  for (unsigned i = 0; i < numRegions; ++i) {
     Region &existing = op->getRegion(i);
     Region &parsed = (*parsedOp)->getRegion(i);
 
@@ -127,11 +131,12 @@ LogicalResult mlir::water::editIRInteractively(Operation *op, StringRef editor,
   }
 
   op->setAttrs((*parsedOp)->getAttrDictionary());
+  op->copyProperties((*parsedOp)->getPropertiesStorage());
   return success();
 }
 
 //===----------------------------------------------------------------------===//
-// PassInstrumentation for --mlir-edit-ir-{before,after}
+// PassInstrumentation for --water-edit-ir-{before,after}
 //===----------------------------------------------------------------------===//
 
 namespace {

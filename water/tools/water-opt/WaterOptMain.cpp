@@ -53,39 +53,39 @@ using namespace mlir;
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
-// --mlir-edit-ir-{before,after} CLI options
+// --water-edit-ir-{before,after} CLI options
 //===----------------------------------------------------------------------===//
 
 static cl::opt<bool> editIRBeforeAll(
-    "mlir-edit-ir-before-all",
+    "water-edit-ir-before-all",
     cl::desc("Open the IR for interactive editing before each pass"),
     cl::init(false));
 
 static cl::opt<std::string> editIRBefore(
-    "mlir-edit-ir-before",
+    "water-edit-ir-before",
     cl::desc("Open the IR for interactive editing before a specific pass "
              "(pass argument name, e.g. 'canonicalize')"),
     cl::init(""));
 
 static cl::opt<bool> editIRAfterAll(
-    "mlir-edit-ir-after-all",
+    "water-edit-ir-after-all",
     cl::desc("Open the IR for interactive editing after each pass"),
     cl::init(false));
 
 static cl::opt<std::string> editIRAfter(
-    "mlir-edit-ir-after",
+    "water-edit-ir-after",
     cl::desc("Open the IR for interactive editing after a specific pass "
              "(pass argument name, e.g. 'canonicalize')"),
     cl::init(""));
 
 static cl::opt<std::string> editIREditor(
-    "mlir-edit-ir-editor",
-    cl::desc("Editor command for --mlir-edit-ir-{before,after}[-all] "
+    "water-edit-ir-editor",
+    cl::desc("Editor command for --water-edit-ir-{before,after}[-all] "
              "(default: $EDITOR)"),
     cl::init(""));
 
 /// Build a pass filter from an -all bool flag and a single-pass string flag.
-static water::PassFilter buildEditFilter(bool all, const std::string &name) {
+static water::PassFilter buildEditFilter(bool all, StringRef name) {
   if (all)
     return [](Pass *, Operation *) { return true; };
   if (!name.empty()) {
@@ -95,7 +95,7 @@ static water::PassFilter buildEditFilter(bool all, const std::string &name) {
   return nullptr;
 }
 
-/// If any --mlir-edit-ir-* flags are set, attach the edit-IR
+/// If any --water-edit-ir-* flags are set, attach the edit-IR
 /// instrumentation to `pm`.
 static void addEditIRInstrumentation(PassManager &pm) {
   auto beforeFilter = buildEditFilter(editIRBeforeAll, editIRBefore);

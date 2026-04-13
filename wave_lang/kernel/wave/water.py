@@ -36,16 +36,16 @@ from wave_lang.support.ir_imports import (
 
 
 def _edit_ir_flags(options: "WaveCompileOptions") -> list[str]:
-    """Return `--mlir-edit-ir-*` CLI flags for the given options."""
+    """Return `--water-edit-ir-*` CLI flags for the given options."""
     flags = []
-    if options.mlir_edit_ir_before_all:
-        flags.append("--mlir-edit-ir-before-all")
-    elif options.mlir_edit_ir_before is not None:
-        flags.append(f"--mlir-edit-ir-before={options.mlir_edit_ir_before}")
-    if options.mlir_edit_ir_after_all:
-        flags.append("--mlir-edit-ir-after-all")
-    elif options.mlir_edit_ir_after is not None:
-        flags.append(f"--mlir-edit-ir-after={options.mlir_edit_ir_after}")
+    if options.edit_ir_before_all:
+        flags.append("--water-edit-ir-before-all")
+    elif options.edit_ir_before is not None:
+        flags.append(f"--water-edit-ir-before={options.edit_ir_before}")
+    if options.edit_ir_after_all:
+        flags.append("--water-edit-ir-after-all")
+    elif options.edit_ir_after is not None:
+        flags.append(f"--water-edit-ir-after={options.edit_ir_after}")
     return flags
 
 
@@ -55,7 +55,7 @@ def _run_water_opt(
     """Run `water-opt` (or similar), returning stdout as a string.
 
     When interactive is True the input IR is written to a temp file and stdin
-    is inherited from the terminal so that `--mlir-edit-ir-*` prompts work.
+    is inherited from the terminal so that `--water-edit-ir-*` prompts work.
     Stderr flows to the terminal in that case (needed for edit-IR prompts).
     """
     if interactive:
@@ -480,7 +480,7 @@ def water_waveasm_lowering_pipeline(
         water_args,
         mlir_asm,
         "water-opt (lowering)",
-        options.mlir_edit_ir_interactive,
+        options.edit_ir_interactive,
     )
 
     if options.print_mlir:
@@ -530,7 +530,7 @@ def water_waveasm_lowering_pipeline(
         host_args,
         binary_mlir,
         "water-opt (host)",
-        options.mlir_edit_ir_interactive,
+        options.edit_ir_interactive,
     )
 
     if options.print_mlir:
@@ -629,9 +629,7 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     if options.mlir_print_ir_after_all:
         args.append("--mlir-print-ir-after-all")
     args.extend(_edit_ir_flags(options))
-    result = _run_water_opt(
-        args, mlir_asm, "water-opt", options.mlir_edit_ir_interactive
-    )
+    result = _run_water_opt(args, mlir_asm, "water-opt", options.edit_ir_interactive)
 
     with module.context:
         return Module.parse(result)
@@ -652,7 +650,7 @@ def apply_water_middle_end_passes(
 
     Args:
         mlir_text: Input Wave dialect MLIR as string
-        options: Optional compile options. When any ``mlir_edit_ir_*``
+        options: Optional compile options. When any ``edit_ir_*``
             field is set, the corresponding flag is forwarded to
             ``water-opt`` and stdin is inherited from the terminal.
         print_local_scope: Append ``--mlir-print-local-scope`` to the
@@ -671,5 +669,5 @@ def apply_water_middle_end_passes(
     interactive = False
     if options is not None:
         args.extend(_edit_ir_flags(options))
-        interactive = options.mlir_edit_ir_interactive
+        interactive = options.edit_ir_interactive
     return _run_water_opt(args, mlir_text, "water-opt", interactive)

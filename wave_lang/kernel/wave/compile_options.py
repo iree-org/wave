@@ -125,19 +125,19 @@ class WaveCompileOptions:
         return self.wave_runtime
 
     # === Interactive editing ===
-    mlir_edit_ir_before: Optional[str] = None
-    mlir_edit_ir_after: Optional[str] = None
-    mlir_edit_ir_before_all: bool = False
-    mlir_edit_ir_after_all: bool = False
+    edit_ir_before: Optional[str] = None
+    edit_ir_after: Optional[str] = None
+    edit_ir_before_all: bool = False
+    edit_ir_after_all: bool = False
 
     @property
-    def mlir_edit_ir_interactive(self) -> bool:
-        """True when any `--mlir-edit-ir-*` option is set."""
+    def edit_ir_interactive(self) -> bool:
+        """True when any `--water-edit-ir-*` option is set."""
         return (
-            self.mlir_edit_ir_before is not None
-            or self.mlir_edit_ir_after is not None
-            or self.mlir_edit_ir_before_all
-            or self.mlir_edit_ir_after_all
+            self.edit_ir_before is not None
+            or self.edit_ir_after is not None
+            or self.edit_ir_before_all
+            or self.edit_ir_after_all
         )
 
     # === Print options ===
