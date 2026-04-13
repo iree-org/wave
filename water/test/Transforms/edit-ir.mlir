@@ -1,7 +1,8 @@
 // Test --water-edit-ir-{before,after}[-all] instrumentation.
 //
-// When stdin is empty / EOF, the interactive prompt returns immediately and
-// the IR round-trips through write-to-file / re-parse / replace unchanged.
+// Each edit-IR stop reads one line from stdin; pressing Enter (or a piped
+// newline) continues, 'q' or EOF aborts. The -all tests pipe two newlines
+// because the pipeline has two passes.
 
 // --- 1. --water-edit-ir-after fires only for the named pass ----------------
 // RUN: echo "" | water-opt %s -mlir-disable-threading=true \
@@ -24,7 +25,7 @@
 // BEFORE-NOT: === water-edit-ir after
 
 // --- 3. --water-edit-ir-after-all fires for every pass ---------------------
-// RUN: echo "" | water-opt %s -mlir-disable-threading=true \
+// RUN: printf '\n\n' | water-opt %s -mlir-disable-threading=true \
 // RUN:   -pass-pipeline='builtin.module(canonicalize,cse)' \
 // RUN:   --water-edit-ir-after-all -o /dev/null \
 // RUN:   | FileCheck -check-prefix=AFTER_ALL %s
@@ -34,7 +35,7 @@
 // AFTER_ALL:     === water-edit-ir after cse ===
 
 // --- 4. --water-edit-ir-before-all fires for every pass --------------------
-// RUN: echo "" | water-opt %s -mlir-disable-threading=true \
+// RUN: printf '\n\n' | water-opt %s -mlir-disable-threading=true \
 // RUN:   -pass-pipeline='builtin.module(canonicalize,cse)' \
 // RUN:   --water-edit-ir-before-all -o /dev/null \
 // RUN:   | FileCheck -check-prefix=BEFORE_ALL %s
@@ -43,7 +44,16 @@
 // BEFORE_ALL:     === water-edit-ir before canonicalize ===
 // BEFORE_ALL:     === water-edit-ir before cse ===
 
-// --- 5. Round-trip: pipeline result is identical with and without edit -----
+// --- 5. Abort: 'q' at the first stop aborts the rest of the pipeline ------
+// RUN: echo "q" | not water-opt %s -mlir-disable-threading=true \
+// RUN:   -pass-pipeline='builtin.module(canonicalize,cse)' \
+// RUN:   --water-edit-ir-after-all -o /dev/null 2>&1 \
+// RUN:   | FileCheck -check-prefix=ABORT %s
+
+// ABORT:     === water-edit-ir after canonicalize ===
+// ABORT-NOT: === water-edit-ir after cse ===
+
+// --- 6. Round-trip: pipeline result is identical with and without edit -----
 // RUN: echo "" | water-opt %s -mlir-disable-threading=true \
 // RUN:   -pass-pipeline='builtin.module(canonicalize,cse)' \
 // RUN:   --water-edit-ir-after=canonicalize \

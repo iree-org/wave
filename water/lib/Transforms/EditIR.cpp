@@ -85,54 +85,66 @@ LogicalResult mlir::water::editIRInteractively(Operation *op, StringRef editor,
   if (!editorCmd.empty())
     tryOpenInEditor(editorCmd, tmpPath, op);
 
-  // Prompt the user and wait for Enter (or EOF).
   llvm::outs() << "=== water-edit-ir";
   if (!passLabel.empty())
     llvm::outs() << " " << passLabel;
   llvm::outs() << " ===\n"
                << "IR written to: " << tmpPath << "\n"
-               << "Edit the file, then press Enter to continue "
-                  "compilation...\n";
+               << "Press Enter to continue, or 'q' to abort compilation...\n";
   llvm::outs().flush();
 
-  // fgets instead of std::cin to avoid pulling in <iostream> (static
-  // initializers). Buffer only needs to hold '\n' + '\0'.
-  char buf[2];
-  (void)std::fgets(buf, sizeof(buf), stdin);
+  while (true) {
+    int first = std::getchar();
+    if (first == EOF || first == 'q' || first == 'Q')
+      return failure();
+    // Drain the rest of the line so nothing leaks into the next iteration.
+    for (int c = first; c != '\n' && c != EOF;)
+      c = std::getchar();
 
-  // Re-parse the (potentially edited) file.
-  auto fileOrErr = llvm::MemoryBuffer::getFile(tmpPath);
-  if (!fileOrErr)
-    return op->emitError() << "failed to read edited file: "
-                           << fileOrErr.getError().message();
+    auto fileOrErr = llvm::MemoryBuffer::getFile(tmpPath);
+    if (!fileOrErr)
+      return op->emitError() << "failed to read edited file: "
+                             << fileOrErr.getError().message();
 
-  llvm::SourceMgr sourceMgr;
-  sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), SMLoc());
-  SourceMgrDiagnosticHandler diagHandler(sourceMgr, context);
+    llvm::SourceMgr sourceMgr;
+    sourceMgr.AddNewSourceBuffer(std::move(*fileOrErr), SMLoc());
 
-  OwningOpRef<Operation *> parsedOp =
-      parseSourceFile<Operation *>(sourceMgr, context);
-  if (!parsedOp)
-    return failure(); // Parser already emitted diagnostics.
+    std::string diagStr;
+    llvm::raw_string_ostream diagOS(diagStr);
+    SourceMgrDiagnosticHandler diagHandler(sourceMgr, context, diagOS);
 
-  if (op->getName() != (*parsedOp)->getName())
-    return op->emitError()
-           << "edited IR has a different top-level operation ('"
-           << (*parsedOp)->getName() << "' vs '" << op->getName() << "')";
+    OwningOpRef<Operation *> parsedOp =
+        parseSourceFile<Operation *>(sourceMgr, context);
 
-  // Replace the operation's regions, attributes, and properties.
-  unsigned numRegions = op->getNumRegions();
-  for (unsigned i = 0; i < numRegions; ++i) {
-    Region &existing = op->getRegion(i);
-    Region &parsed = (*parsedOp)->getRegion(i);
+    if (parsedOp) {
+      if (op->getName() != (*parsedOp)->getName())
+        return op->emitError()
+               << "edited IR has a different top-level operation ('"
+               << (*parsedOp)->getName() << "' vs '" << op->getName() << "')";
 
-    existing.getBlocks().clear();
-    existing.getBlocks().splice(existing.getBlocks().end(), parsed.getBlocks());
+      unsigned numRegions = op->getNumRegions();
+      for (unsigned i = 0; i < numRegions; ++i) {
+        Region &existing = op->getRegion(i);
+        Region &parsed = (*parsedOp)->getRegion(i);
+        existing.getBlocks().clear();
+        existing.getBlocks().splice(existing.getBlocks().end(),
+                                    parsed.getBlocks());
+      }
+      op->setAttrs((*parsedOp)->getAttrDictionary());
+      op->copyProperties((*parsedOp)->getPropertiesStorage());
+      return success();
+    }
+
+    // Parse failed -- print diagnostics and re-prompt.
+    // The file is left untouched so that line numbers remain correct.
+    llvm::outs() << "Failed to parse edited IR:\n"
+                 << diagStr
+                 << "Press Enter to retry, or 'q' to abort compilation...\n";
+    llvm::outs().flush();
+
+    if (!editorCmd.empty())
+      tryOpenInEditor(editorCmd, tmpPath, op);
   }
-
-  op->setAttrs((*parsedOp)->getAttrDictionary());
-  op->copyProperties((*parsedOp)->getPropertiesStorage());
-  return success();
 }
 
 //===----------------------------------------------------------------------===//

@@ -52,27 +52,30 @@ def _edit_ir_flags(options: "WaveCompileOptions") -> list[str]:
 def _run_water_opt(
     args: list[str], mlir_input: str, tool_name: str, interactive: bool
 ) -> str:
-    """Run `water-opt` (or similar), returning stdout as a string.
+    """Run `water-opt` (or similar), returning the compiled IR as a string.
 
-    When interactive is True the input IR is written to a temp file and stdin
-    is inherited from the terminal so that `--water-edit-ir-*` prompts work.
-    Stderr flows to the terminal in that case (needed for edit-IR prompts).
+    When interactive is True the input IR is written to a temp file, the
+    compiled output is directed to a separate temp file via `-o`, and
+    stdout/stderr/stdin are inherited from the terminal so that
+    `--water-edit-ir-*` prompts are visible and interactive.
     """
     if interactive:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".mlir", delete=False) as f:
             f.write(mlir_input)
             input_path = f.name
+        output_path = tempfile.mktemp(suffix=".mlir")
         try:
-            result = subprocess.run(
-                [*args, input_path], stdout=subprocess.PIPE, text=True
-            )
+            result = subprocess.run([*args, input_path, "-o", output_path])
             if result.returncode != 0:
                 raise RuntimeError(
                     f"{tool_name} failed with return code {result.returncode}."
                 )
-            return result.stdout
+            with open(output_path) as out_f:
+                return out_f.read()
         finally:
             os.unlink(input_path)
+            if os.path.exists(output_path):
+                os.unlink(output_path)
     else:
         try:
             return subprocess.check_output(
