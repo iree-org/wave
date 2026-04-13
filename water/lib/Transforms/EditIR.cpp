@@ -77,7 +77,7 @@ LogicalResult mlir::water::editIRInteractively(Operation *op, StringRef editor,
              << "failed to open temporary file for writing: " << ec.message();
     if (!passLabel.empty())
       tmpFile << "// -----// IR Edit " << passLabel << " //----- //\n";
-    op->print(tmpFile);
+    op->print(tmpFile, OpPrintingFlags().enableDebugInfo());
     tmpFile << '\n';
   }
 
