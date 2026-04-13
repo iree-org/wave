@@ -35,6 +35,58 @@ from wave_lang.support.ir_imports import (
 )
 
 
+def _edit_ir_flags(options: "WaveCompileOptions") -> list[str]:
+    """Return `--mlir-edit-ir-*` CLI flags for the given options."""
+    flags = []
+    if options.mlir_edit_ir_before_all:
+        flags.append("--mlir-edit-ir-before-all")
+    elif options.mlir_edit_ir_before is not None:
+        flags.append(f"--mlir-edit-ir-before={options.mlir_edit_ir_before}")
+    if options.mlir_edit_ir_after_all:
+        flags.append("--mlir-edit-ir-after-all")
+    elif options.mlir_edit_ir_after is not None:
+        flags.append(f"--mlir-edit-ir-after={options.mlir_edit_ir_after}")
+    return flags
+
+
+def _run_water_opt(
+    args: list[str], mlir_input: str, tool_name: str, interactive: bool
+) -> str:
+    """Run `water-opt` (or similar), returning stdout as a string.
+
+    When interactive is True the input IR is written to a temp file and stdin
+    is inherited from the terminal so that `--mlir-edit-ir-*` prompts work.
+    Stderr flows to the terminal in that case (needed for edit-IR prompts).
+    """
+    if interactive:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".mlir", delete=False) as f:
+            f.write(mlir_input)
+            input_path = f.name
+        try:
+            result = subprocess.run(
+                [*args, input_path], stdout=subprocess.PIPE, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"{tool_name} failed with return code {result.returncode}."
+                )
+            return result.stdout
+        finally:
+            os.unlink(input_path)
+    else:
+        try:
+            return subprocess.check_output(
+                args, input=mlir_input, stderr=subprocess.PIPE, text=True
+            )
+        except subprocess.CalledProcessError as e:
+            error_msg = (
+                f"{tool_name} subprocess failed with return code {e.returncode}."
+            )
+            if e.stderr:
+                error_msg += f" Error: {e.stderr}"
+            raise RuntimeError(error_msg) from e
+
+
 def _find_single_nested(name: str, parent: Operation) -> Operation:
     """Find a single operation with the specified name in a single-block parent operation.
 
@@ -420,25 +472,16 @@ def water_waveasm_lowering_pipeline(
         *add_opt(canonicalize_cse),
     ]
 
-    def run_subprocess(args, input_text, tool_name):
-        try:
-            result = subprocess.run(
-                args, input=input_text, text=True, capture_output=True
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"{tool_name} failed (rc={result.returncode}):\n{result.stderr}"
-                )
-            return result.stdout
-        except RuntimeError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"{tool_name} failed: {e}") from e
-
     water_args = [water_opt, make_linear_pass_pipeline(lowering_pipeline)]
     if options.mlir_print_ir_after_all:
         water_args.append("--mlir-print-ir-after-all")
-    lowered_mlir = run_subprocess(water_args, mlir_asm, "water-opt (lowering)")
+    water_args.extend(_edit_ir_flags(options))
+    lowered_mlir = _run_water_opt(
+        water_args,
+        mlir_asm,
+        "water-opt (lowering)",
+        options.mlir_edit_ir_interactive,
+    )
 
     if options.print_mlir:
         print("=== After water-opt lowering ===")
@@ -467,7 +510,7 @@ def water_waveasm_lowering_pipeline(
     ]
     if options.mlir_print_ir_after_all:
         waveasm_args.append("--mlir-print-ir-after-all")
-    binary_mlir = run_subprocess(waveasm_args, lowered_mlir, "waveasm-translate")
+    binary_mlir = _run_water_opt(waveasm_args, lowered_mlir, "waveasm-translate", False)
 
     if options.print_mlir:
         print("=== After waveasm-translate ===")
@@ -482,7 +525,13 @@ def water_waveasm_lowering_pipeline(
     host_args = [water_opt, make_linear_pass_pipeline(host_pipeline)]
     if options.mlir_print_ir_after_all:
         host_args.append("--mlir-print-ir-after-all")
-    final_mlir = run_subprocess(host_args, binary_mlir, "water-opt (host)")
+    host_args.extend(_edit_ir_flags(options))
+    final_mlir = _run_water_opt(
+        host_args,
+        binary_mlir,
+        "water-opt (host)",
+        options.mlir_edit_ir_interactive,
+    )
 
     if options.print_mlir:
         print("=== After water-opt host ===")
@@ -579,23 +628,20 @@ def water_lowering_pipeline(module: Module, options: WaveCompileOptions) -> Modu
     args = [binary, make_linear_pass_pipeline(pipeline)]
     if options.mlir_print_ir_after_all:
         args.append("--mlir-print-ir-after-all")
-
-    try:
-        result = subprocess.check_output(
-            args,
-            input=mlir_asm,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        error_msg = f"Subprocess failed with return code {e.returncode}."
-        raise RuntimeError(error_msg) from e
+    args.extend(_edit_ir_flags(options))
+    result = _run_water_opt(
+        args, mlir_asm, "water-opt", options.mlir_edit_ir_interactive
+    )
 
     with module.context:
         return Module.parse(result)
 
 
 def apply_water_middle_end_passes(
-    mlir_text: str, *, print_local_scope: bool = False
+    mlir_text: str,
+    options: "WaveCompileOptions | None" = None,
+    *,
+    print_local_scope: bool = False,
 ) -> str:
     """Apply Water middle-end pipeline using subprocess water-opt.
 
@@ -606,6 +652,11 @@ def apply_water_middle_end_passes(
 
     Args:
         mlir_text: Input Wave dialect MLIR as string
+        options: Optional compile options. When any ``mlir_edit_ir_*``
+            field is set, the corresponding flag is forwarded to
+            ``water-opt`` and stdin is inherited from the terminal.
+        print_local_scope: Append ``--mlir-print-local-scope`` to the
+            water-opt invocation.
 
     Returns:
         Optimized MLIR as string after applying the passes
@@ -614,25 +665,11 @@ def apply_water_middle_end_passes(
         RuntimeError: If water-opt is not available or passes fail
     """
     binary = get_water_opt()
-
-    try:
-        command = [
-            binary,
-            "--allow-unregistered-dialect",
-            "--water-middle-end-lowering",
-        ]
-        if print_local_scope:
-            command.append("--mlir-print-local-scope")
-        result = subprocess.check_output(
-            command,
-            input=mlir_text,
-            text=True,
-        )
-
-        return result
-
-    except subprocess.CalledProcessError as e:
-        error_msg = f"water-opt subprocess failed with return code {e.returncode}."
-        if e.stderr:
-            error_msg += f" Error: {e.stderr}"
-        raise RuntimeError(error_msg) from e
+    args = [binary, "--allow-unregistered-dialect", "--water-middle-end-lowering"]
+    if print_local_scope:
+        args.append("--mlir-print-local-scope")
+    interactive = False
+    if options is not None:
+        args.extend(_edit_ir_flags(options))
+        interactive = options.mlir_edit_ir_interactive
+    return _run_water_opt(args, mlir_text, "water-opt", interactive)

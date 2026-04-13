@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "water/Tools/water-opt/WaterOptMain.h"
+#include "water/Transforms/EditIR.h"
 
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Debug/CLOptionsSetup.h"
@@ -25,6 +26,7 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/FileUtilities.h"
@@ -49,6 +51,64 @@
 
 using namespace mlir;
 using namespace llvm;
+
+//===----------------------------------------------------------------------===//
+// --mlir-edit-ir-{before,after} CLI options
+//===----------------------------------------------------------------------===//
+
+static cl::opt<bool> editIRBeforeAll(
+    "mlir-edit-ir-before-all",
+    cl::desc("Open the IR for interactive editing before each pass"),
+    cl::init(false));
+
+static cl::opt<std::string> editIRBefore(
+    "mlir-edit-ir-before",
+    cl::desc("Open the IR for interactive editing before a specific pass "
+             "(pass argument name, e.g. 'canonicalize')"),
+    cl::init(""));
+
+static cl::opt<bool> editIRAfterAll(
+    "mlir-edit-ir-after-all",
+    cl::desc("Open the IR for interactive editing after each pass"),
+    cl::init(false));
+
+static cl::opt<std::string> editIRAfter(
+    "mlir-edit-ir-after",
+    cl::desc("Open the IR for interactive editing after a specific pass "
+             "(pass argument name, e.g. 'canonicalize')"),
+    cl::init(""));
+
+static cl::opt<std::string> editIREditor(
+    "mlir-edit-ir-editor",
+    cl::desc("Editor command for --mlir-edit-ir-{before,after}[-all] "
+             "(default: $EDITOR)"),
+    cl::init(""));
+
+/// Build a pass filter from an -all bool flag and a single-pass string flag.
+static water::PassFilter buildEditFilter(bool all, const std::string &name) {
+  if (all)
+    return [](Pass *, Operation *) { return true; };
+  if (!name.empty()) {
+    return
+        [name](Pass *pass, Operation *) { return pass->getArgument() == name; };
+  }
+  return nullptr;
+}
+
+/// If any --mlir-edit-ir-* flags are set, attach the edit-IR
+/// instrumentation to `pm`.
+static void addEditIRInstrumentation(PassManager &pm) {
+  auto beforeFilter = buildEditFilter(editIRBeforeAll, editIRBefore);
+  auto afterFilter = buildEditFilter(editIRAfterAll, editIRAfter);
+
+  if (!beforeFilter && !afterFilter)
+    return;
+
+  pm.addInstrumentation(water::createEditIRInstrumentation(
+      std::move(beforeFilter), std::move(afterFilter), editIREditor));
+}
+
+//===----------------------------------------------------------------------===//
 
 /// Unrolls a call site containing other call site locations as callers (call
 /// stack) into a flat list of callee locations.
@@ -340,6 +400,7 @@ performActions(raw_ostream &os,
   pm.enableVerifier(config.shouldVerifyPasses());
   if (failed(applyPassManagerCLOptions(pm)))
     return failure();
+  addEditIRInstrumentation(pm);
   pm.enableTiming(timing);
   if (config.shouldRunReproducer() && failed(reproOptions.apply(pm)))
     return failure();

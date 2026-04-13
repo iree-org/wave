@@ -124,6 +124,22 @@ class WaveCompileOptions:
     def dynamic_strides(self) -> bool:
         return self.wave_runtime
 
+    # === Interactive editing ===
+    mlir_edit_ir_before: Optional[str] = None
+    mlir_edit_ir_after: Optional[str] = None
+    mlir_edit_ir_before_all: bool = False
+    mlir_edit_ir_after_all: bool = False
+
+    @property
+    def mlir_edit_ir_interactive(self) -> bool:
+        """True when any `--mlir-edit-ir-*` option is set."""
+        return (
+            self.mlir_edit_ir_before is not None
+            or self.mlir_edit_ir_after is not None
+            or self.mlir_edit_ir_before_all
+            or self.mlir_edit_ir_after_all
+        )
+
     # === Print options ===
     mlir_print_ir_after_all: bool = False
     print_ir_after: list[str] = field(default_factory=list)
