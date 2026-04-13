@@ -172,11 +172,15 @@ def get_mxfp4_dbuf_schedule(use_stagger: bool = True, k_partitions: int = 2):
         loop_shared_load_b_0, loop_shared_load_b_1 = _partition_mxfp4_loop_k(
             loop_shared_load_b, K, k_partitions=k_partitions
         )
-        loop_shared_load_a_scale_0, loop_shared_load_a_scale_1 = _partition_mxfp4_loop_k(
-            loop_shared_load_a_scale, K, k_partitions=k_partitions
+        loop_shared_load_a_scale_0, loop_shared_load_a_scale_1 = (
+            _partition_mxfp4_loop_k(
+                loop_shared_load_a_scale, K, k_partitions=k_partitions
+            )
         )
-        loop_shared_load_b_scale_0, loop_shared_load_b_scale_1 = _partition_mxfp4_loop_k(
-            loop_shared_load_b_scale, K, k_partitions=k_partitions
+        loop_shared_load_b_scale_0, loop_shared_load_b_scale_1 = (
+            _partition_mxfp4_loop_k(
+                loop_shared_load_b_scale, K, k_partitions=k_partitions
+            )
         )
         loop_bitcast_a_0, loop_bitcast_a_1 = _partition_mxfp4_loop_k(
             loop_bitcast_a, K, k_partitions=k_partitions
