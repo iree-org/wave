@@ -19,14 +19,14 @@ a website build and publishes the latest content.
 From the project root directory:
 
 ```shell
-python -m venv .venv
+uv venv .venv
 source .venv/bin/activate
 
 # Install PyTorch (CPU version for docs)
-python -m pip install -r pytorch-cpu-requirements.txt
+uv pip install -r pytorch-cpu-requirements.txt
 
 # Install wave with docs dependencies
-python -m pip install -e ".[docs]"
+uv pip install -e ".[docs]"
 ```
 
 ### Build docs
