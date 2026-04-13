@@ -23,7 +23,7 @@ from wave_lang.kernel.lang.global_symbols import (
     GLOBAL_ADDRESS_SPACE,
     SHARED_ADDRESS_SPACE,
 )
-from wave_lang.kernel.wave.compile import WaveCompileOptions, wave_compile
+from wave_lang.kernel.wave.compile import wave_compile
 from wave_lang.kernel.wave.constraints import ScaledMMAType
 from wave_lang.kernel.wave.schedules import (
     get_mxfp4_asymmetric_schedule,
