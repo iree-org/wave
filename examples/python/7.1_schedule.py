@@ -113,8 +113,7 @@ def _run_mxfp_gemm_preshuffle_transposed(gemm, shape, output_dtype=torch.float32
 
     out = torch.zeros(M_orig, N_orig, dtype=output_dtype).cuda()
 
-    for _ in range(100):
-        gemm(w_t, w_scales_ps, x_ps, x_scales_ps, out)
+    gemm(w_t, w_scales_ps, x_ps, x_scales_ps, out)
     torch.testing.assert_close(
         torch_out, out.cpu(), check_dtype=False, check_device=False
     )
@@ -2123,7 +2122,6 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
 
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
-    print(gemm.asm)
 
     _run_mxfp_gemm_preshuffle(gemm, shape, all=True, output_dtype=torch.bfloat16)
     mode = "dynamic" if dynamic else "static"
