@@ -4,6 +4,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   AssembleISA.cpp
   CheckStaticAssertions.cpp
   DropTransformOps.cpp
+  EditIR.cpp
   GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
   MemrefDecomposition.cpp
@@ -26,6 +27,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   MLIRIR
   MLIRLLVMDialect
   MLIRMemRefDialect
+  MLIRParser
   MLIRPass
   MLIRRewrite
   MLIRROCDLTarget
