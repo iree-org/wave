@@ -486,6 +486,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled(
     """Return a double-buffered MXFP4 schedule for wave_compile().
     Same as get_mxfp4_dbuf_pingpong_schedule(), but B data is shuffled and read
     from global memory directly to VGPRs.
+    A is prefetched to shared memory. B, A scale and B scale are prefetched to VGPRs.
 
     Args:
         use_stagger: Enable wave staggering + WorkgroupBarrier in cluster 0.

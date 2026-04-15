@@ -1157,7 +1157,7 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndB(
     dynamic: bool,
 ):
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule, scale and B preshuffling.
-    B is prefetched through VGPRs.
+    A is prefetched to shared memory. B, A scale and B scale are prefetched to VGPRs.
     """
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         shape,
@@ -1208,7 +1208,8 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndBLDS(
     dynamic: bool,
 ):
     """8-wave double-buffered MXFP4 GEMM with ping-pong schedule, scale and B preshuffling.
-    B is prefteched through LDS.
+    A and B are prefetched through LDS.
+    A scale and B scale are prefetched to VGPRs.
     """
 
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
