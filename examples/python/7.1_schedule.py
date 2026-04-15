@@ -233,8 +233,11 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     A data is read from global memory directly to LDS.
     """
 
-    # Dynamic kernel: Mlir snippet that performs swizzle and dword stores to global memory (instead of u shorts).
-    # This optmization brings approx 7% improvement in performance.
+    # Dynamic kernel: MLIR snippet that performs swizzle and dword stores to global
+    # memory (instead of u shorts). This optimization brings approx 7% improvement
+    # in performance.
+    # TODO: implement a pass that automatically emits the optimized epilogue
+    # storing logic for this MXFP4 kernel.
     mlir_256x192 = """
         #map = affine_map<()[s0] -> (s0 ceildiv 256)>
         #map1 = affine_map<()[s0] -> (s0 ceildiv 192)>
