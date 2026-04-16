@@ -1167,7 +1167,7 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndB(
     )
     options.specialize = True
     options.use_buffer_ops = True
-    options.minimize_shared_allocs = False
+    options.minimize_shared_allocs = True
     options.linearize_shared_access = True
     options.wave_runtime = True
 
@@ -1221,7 +1221,7 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndBLDS(
     )
     options.specialize = True
     options.use_buffer_ops = True
-    options.minimize_shared_allocs = False
+    options.minimize_shared_allocs = True
     options.linearize_shared_access = True
     options.wave_runtime = True
     if dynamic:
@@ -1232,13 +1232,11 @@ def testScaledGemmMXFP48WavePingpongPreshuffleScalesAndBLDS(
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         use_stagger=True, shape=shape
     )
-    UNROLL_FACTOR = tkl.sym.UNROLL_FACTOR
-    options.subs[UNROLL_FACTOR] = 2
     options.postprocess = """
     module attributes {transform.with_named_sequence} {
         transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
             %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
-            transform.loop.unroll %0 { factor = %%UNROLL_FACTOR%% } : !transform.any_op
+            transform.loop.unroll %0 { factor = 2 } : !transform.any_op
             transform.yield
         }
     }
