@@ -819,6 +819,23 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         number_outstanding_loads_to_vgpr = len(loop_a_scale_reads) + len(
             loop_b_scale_reads
         )
+   
+        # To get a race-free kernel we must ensure that all global->shared memory
+        # loads issued by cluster 1 (waves 4-7) have landed before cluster 0
+        # (waves 0-3) begins reading from shared memory. This is enforced by a
+        # memory_counter_wait issued before the last phase starts.
+        #
+        # However, not every load issued by cluster 1 is consumed by cluster 0.
+        # Loads whose results are only ever read within cluster 1 itself carry no
+        # inter-cluster dependency, so cluster 0 does not need to wait for them.
+        # We call these "safe" loads. The `safe` value passed to
+        # memory_counter_wait is the count of such loads that may still be
+        # outstanding at the sync point without causing a hazard.
+        #
+        # The safe count is determined per block size by inspecting which
+        # affine-map indices each cluster reads.
+        # TODO: automate this with a compiler pass that derives inter-cluster
+        # dependencies.
         safe = 0
         if block is not None and block == (256, 192, 256):
             safe = 2
@@ -826,8 +843,6 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         if block is not None and block == (256, 160, 256):
             safe = 5
 
-        # If the bus gets congested and cluster memory dependency are affected, we must add a second barrier to fix the timing and prevent incorrect output results.
-        # In case a second a second workgroup barrier is needed, another schedule is created to hide the latency of that second barrier, by scheduling safe ds_read ops before the second barrier (see get_mxfp4_dbuf_mixed_pingpong_schedule).
         if block is not None and block == (256, 192, 256):
 
             cluster_0_ops = [
