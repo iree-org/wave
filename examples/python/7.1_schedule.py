@@ -271,6 +271,7 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
         f"MXFP GEMM double-buffer 8-wave ping pong with scales and B shuffling and B->LDS ({mode}) test passed!"
     )
 
+
 def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds_optimized_epilogue(
     is_debug=False, shape=(1024, 1920, 8192), block=(256, 192, 256), dynamic=True
 ):
@@ -283,7 +284,9 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds_optimized_epilogue(
 
     # TODO: implement a pass that automatically emits the optimized epilogue
     # storing logic for this MXFP4 kernel.
-    mlir_256x192 = (pathlib.Path(__file__).parent / "mlir" / "mxfp4_epilogue_opt_256x192x256.mlir").read_text()
+    mlir_256x192 = (
+        pathlib.Path(__file__).parent / "mlir" / "mxfp4_epilogue_opt_256x192x256.mlir"
+    ).read_text()
     wave_shape = _get_8wave_shape_from_block(block)
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         shape,
@@ -346,7 +349,11 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds_transposed(
     A&B scales are preshuffled and read from global memory directly to VGPRs.
     """
 
-    mlir_epilogue_opt_256x192x256 = (pathlib.Path(__file__).parent / "mlir" / "mxfp4_transposed_epilogue_opt_256x192x256.mlir").read_text()
+    mlir_epilogue_opt_256x192x256 = (
+        pathlib.Path(__file__).parent
+        / "mlir"
+        / "mxfp4_transposed_epilogue_opt_256x192x256.mlir"
+    ).read_text()
 
     M_orig, N_orig, K = shape
     shape_t = (N_orig, M_orig, K)

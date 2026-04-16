@@ -3,7 +3,7 @@
 // Shape: M=256, N=192, K=256. Inputs: MXFP4 (f4E2M1FN) with f8E8M0FNU scales.
 // Output: bf16, row-major C[M, N].
 //
-// The kernel computes C = A * B^T. The epilogue uses swizzle to exchange data 
+// The kernel computes C = A * B^T. The epilogue uses swizzle to exchange data
 // between lanes and enables wider vector<2xbf16> stores (buffer_store_dword)
 // instead of the ushort scalar stores the compiler would otherwise emit (~7% performance improvement).
 //

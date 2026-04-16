@@ -819,7 +819,7 @@ def get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
         number_outstanding_loads_to_vgpr = len(loop_a_scale_reads) + len(
             loop_b_scale_reads
         )
-   
+
         # To get a race-free kernel we must ensure that all global->shared memory
         # loads issued by cluster 1 (waves 4-7) have landed before cluster 0
         # (waves 0-3) begins reading from shared memory. This is enforced by a
