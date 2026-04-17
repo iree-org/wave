@@ -13,7 +13,7 @@ Usage:
 
 import torch
 from utils import list_tests, parse_args, run_test
-
+import pathlib
 import wave_lang.kernel.lang as tkl
 from wave_lang.kernel.lang.global_symbols import (
     GLOBAL_ADDRESS_SPACE,
@@ -90,6 +90,30 @@ def _run_mxfp_gemm_preshuffle(
 
     gemm(x, x_scales_ps, w_t_ps, w_scales_ps, out)
 
+    torch.testing.assert_close(
+        torch_out, out.cpu(), check_dtype=False, check_device=False
+    )
+
+
+def _run_mxfp_gemm_preshuffle_transposed(gemm, shape, output_dtype=torch.float32):
+    """Run transposed GEMM that outputs C[M, N] in row-major layout.
+    Internally computes C^T = B * A^T, then the permlane_swap epilogue
+    writes the result as C[M, N] to global memory.
+    Output is allocated as (M, N) and compared directly against the reference.
+    """
+    M_orig, N_orig, K = shape
+    x, w, x_scales, w_scales = generate_gemm_afp4wfp4_inputs(shape)
+    torch_out = torchScaledGemmMXFP4(x, w, x_scales, w_scales)
+    w_t = w.T.contiguous()
+    x_ps = b_preshuffle(x)
+    w_scales_ps = e8m0_shuffle(w_scales)
+    x_scales_ps = e8m0_shuffle(x_scales)
+    w_t, x_ps = w_t.cuda(), x_ps.cuda()
+    w_scales_ps, x_scales_ps = w_scales_ps.cuda(), x_scales_ps.cuda()
+
+    out = torch.zeros(M_orig, N_orig, dtype=output_dtype).cuda()
+
+    gemm(w_t, w_scales_ps, x_ps, x_scales_ps, out)
     torch.testing.assert_close(
         torch_out, out.cpu(), check_dtype=False, check_device=False
     )
@@ -208,34 +232,160 @@ def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds(
     B data is preshuffled and loaded to LDS (shared memory), not directly to VGPRs.
     A data is read from global memory directly to LDS.
     """
+
     wave_shape = _get_8wave_shape_from_block(block)
     gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
         shape,
         block,
         wave_shape=wave_shape,
         b_address_space=SHARED_ADDRESS_SPACE,
+        output_dtype=tkl.bf16,
     )
     options.specialize = True
     options.use_buffer_ops = True
-    options.minimize_shared_allocs = False
+    options.minimize_shared_allocs = True
     options.linearize_shared_access = True
-
+    options.wave_runtime = True
     if dynamic:
         options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
         for sym in options.dynamic_symbols:
             del options.subs[sym]
     schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
-        use_stagger=True, shape=shape
+        use_stagger=True, shape=shape, block=block
     )
-
-    options.print_ir_after = "all" if is_debug else []
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = 2 } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
     options = set_default_run_config(options)
     gemm = wave_compile(options, gemm, schedule)
 
-    _run_mxfp_gemm_preshuffle(gemm, shape, all=True)
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True, output_dtype=torch.bfloat16)
     mode = "dynamic" if dynamic else "static"
     print(
         f"MXFP GEMM double-buffer 8-wave ping pong with scales and B shuffling and B->LDS ({mode}) test passed!"
+    )
+
+
+def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds_optimized_epilogue(
+    is_debug=False, shape=(1024, 1920, 8192), block=(256, 192, 256), dynamic=True
+):
+    """Double-buffered MXFP4 GEMM, 8 waves, ping-pong with stagger.
+    A&B scales are preshuffled and read from global memory directly to VGPRs.
+    B data is preshuffled and loaded to LDS (shared memory), not directly to VGPRs.
+    A data is read from global memory directly to LDS.
+    A handwritten dynamic MLIR kernel is used which uses an optimized epilogue that uses swizzle and dword stores to global memory (instead of u shorts).
+    """
+
+    # TODO: implement a pass that automatically emits the optimized epilogue
+    # storing logic for this MXFP4 kernel.
+    mlir_256x192 = (
+        pathlib.Path(__file__).parent / "mlir" / "mxfp4_epilogue_opt_256x192x256.mlir"
+    ).read_text()
+    wave_shape = _get_8wave_shape_from_block(block)
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
+        shape,
+        block,
+        wave_shape=wave_shape,
+        b_address_space=SHARED_ADDRESS_SPACE,
+        output_dtype=tkl.bf16,
+    )
+    options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.wave_runtime = True
+    options.override_mlir = mlir_256x192
+    if dynamic:
+        options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        for sym in options.dynamic_symbols:
+            del options.subs[sym]
+    schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
+        use_stagger=True, shape=shape, block=block
+    )
+    options.postprocess = """
+    module attributes {transform.with_named_sequence} {
+        transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
+            %0 = transform.structured.match ops{["scf.for"]} in %arg0 : (!transform.any_op) -> !transform.any_op
+            transform.loop.unroll %0 { factor = 2 } : !transform.any_op
+            transform.yield
+        }
+    }
+    """
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+
+    _run_mxfp_gemm_preshuffle(gemm, shape, all=True, output_dtype=torch.bfloat16)
+    mode = "dynamic" if dynamic else "static"
+    print(
+        f"MXFP GEMM double-buffer 8-wave ping pong with scales and B shuffling and B->LDS ({mode}) test passed!"
+    )
+
+
+def test_dbuf_8wave_pingpong_mxfp_gemm_Bshuffle_lds_transposed(
+    is_debug=False, shape=(1024, 1920, 4096), block=(256, 192, 256), dynamic=True
+):
+    """MXFP4 Dynamic GEMM with transposed computation for wide stores.
+
+    The output is C[M, N] in row-major layout, same as a standard GEMM.
+    Internally, the kernel computes C^T = B * A^T by swapping the operand
+    roles: the weight matrix B becomes the MFMA left operand and the
+    activation matrix A becomes the MFMA right operand. This means C^T
+    lives in registers after the MFMAs.
+
+    The MLIR used below is handwritten and contains a custom epilogue that uses
+    amdgpu.permlane_swap to exchange data between lanes, packs the f32
+    MFMA outputs to bf16 (vector<4xbf16>), and reassembles the C^T
+    register data into contiguous C[M, N] rows. This enables wide
+    vector<8xbf16> stores (buffer_store_dwordx4) instead of the
+    96 scalar stores the compiler would otherwise emit.
+
+    Activation A is preshuffled (since it is now in the MFMA "B" role).
+    A&B scales are preshuffled and read from global memory directly to VGPRs.
+    """
+
+    mlir_epilogue_opt_256x192x256 = (
+        pathlib.Path(__file__).parent
+        / "mlir"
+        / "mxfp4_transposed_epilogue_opt_256x192x256.mlir"
+    ).read_text()
+
+    M_orig, N_orig, K = shape
+    shape_t = (N_orig, M_orig, K)
+    block_t = (block[1], block[0], block[2])
+
+    wave_shape = _get_8wave_shape_from_block(block_t)
+    gemm, options = get_tagged_mxfp4_gemm_preshuffle_scales_and_B(
+        shape_t,
+        block_t,
+        wave_shape=wave_shape,
+        b_address_space=SHARED_ADDRESS_SPACE,
+        output_dtype=tkl.bf16,
+    )
+    options.specialize = True
+    options.use_buffer_ops = True
+    options.minimize_shared_allocs = True
+    options.linearize_shared_access = True
+    options.wave_runtime = True
+    options.override_mlir = mlir_epilogue_opt_256x192x256
+    if dynamic:
+        options.dynamic_symbols = [tkl.sym.M, tkl.sym.N, tkl.sym.K]
+        for sym in options.dynamic_symbols:
+            del options.subs[sym]
+    schedule = get_mxfp4_dbuf_pingpong_schedule_Bshuffled_lds(
+        use_stagger=True, shape=shape_t, block=block_t
+    )
+    options = set_default_run_config(options)
+    gemm = wave_compile(options, gemm, schedule)
+    _run_mxfp_gemm_preshuffle_transposed(gemm, shape, output_dtype=torch.bfloat16)
+    mode = "dynamic" if dynamic else "static"
+    print(
+        f"MXFP GEMM transposed (C^T=B*A^T) 8-wave ping pong B->LDS ({mode}) test passed!"
     )
 
 
