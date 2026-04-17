@@ -329,9 +329,9 @@ def test_gather_to_shared_scaled_dims():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL:    test_gather_to_shared_scaled_dims
-    # CHECK-DAG:      #[[MAP_COL:.*]] = affine_map<()[s0] -> ((s0 floordiv 8) mod 8)>
+    # CHECK-DAG:      #[[MAP_COL:.*]] = affine_map<()[s0] -> (s0 floordiv 8 - (s0 floordiv 64) * 8)>
     # CHECK-DAG:      #[[MAP_ROW:.*]] = affine_map<()[s0] -> (s0 mod 8)>
-    # CHECK-DAG:      #[[MAP_COL_SCALE:.*]] = affine_map<()[s0] -> ((s0 floordiv 2) mod 2)>
+    # CHECK-DAG:      #[[MAP_COL_SCALE:.*]] = affine_map<()[s0] -> (s0 floordiv 2 - (s0 floordiv 4) * 2)>
     # CHECK-DAG:      #[[MAP_ROW_SCALE:.*]] = affine_map<()[s0] -> (s0 mod 2)>
     # CHECK-DAG:      #[[MAP_ROW_SWIZZLED:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
     # CHECK-DAG:      #[[MAP_ROW_SWIZZLED_2:.*]] = affine_map<()[s0] -> ((s0 mod 64) floordiv 16 + 4)>

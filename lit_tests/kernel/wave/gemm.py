@@ -280,7 +280,7 @@ def test_reordered_gemm():
 
     # CHECK-LABEL:    test_reordered_gemm
     # CHECK-DAG:        #[[MAP_LIN_A:.+]] = affine_map<()[s0, s1, s2, s3, s4] -> (s0 * 65536 + s2 * 16384 + s3 * 8 + s4 * 32 + (s1 floordiv 4) * 32768 + (s3 floordiv 4) * 480 - ((s2 * 32 + s3 floordiv 4) floordiv 64) * 32768 - ((s0 * 8 + s1) floordiv 32) * 262144)>
-    # CHECK-DAG:        #[[MAP_LIN_B:.+]] = affine_map<()[s0, s1, s2, s3, s4] -> (s0 * 32768 + s2 * 16384 + s3 * 8 + s4 * 32 + ((s0 + s1 * 8) floordiv 32) * 131072 + (s3 floordiv 4) * 480 - ((s2 * 32 + s3 floordiv 4) floordiv 64) * 32768 - (s0 floordiv 4) * 131072)>
+    # CHECK-DAG:        #[[MAP_LIN_B:.+]] = affine_map<()[s0, s1, s2, s3, s4] -> (s0 * 32768 + s2 * 16384 + s3 * 8 + s4 * 32 + ((s0 + s1 * 8) floordiv 32) * 131072 - (s0 floordiv 4) * 131072 + (s3 floordiv 4) * 480 - ((s2 * 32 + s3 floordiv 4) floordiv 64) * 32768)>
     # CHECK-DAG:        affine.apply #[[MAP_LIN_A]]()[%block_id_y, %block_id_x, %thread_id_y, %thread_id_x, {{.*}}]
     # CHECK-DAG:        affine.apply #[[MAP_LIN_B]]()[%block_id_x, %block_id_y, %thread_id_y, %thread_id_x, {{.*}}]
     # CHECK-DAG:        vector.load {{.*}} : memref<{{.*}}xf16, strided<[1]>>, vector<8xf16>

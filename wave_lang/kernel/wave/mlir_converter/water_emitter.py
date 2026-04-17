@@ -59,6 +59,7 @@ from wave_lang.kernel.wave.compile_options import WaveCompileOptions
 from wave_lang.kernel.wave.utils.general_utils import infer_dim
 from wave_lang.kernel.wave.utils.symbol_utils import (
     collect_allowed_induction_symbols,
+    ixs_simplify,
     strip_out_of_scope_induction_symbols,
 )
 
@@ -349,7 +350,7 @@ def _convert_sympy_expr_to_affine_map(
     # Simplify the expression with the assumption that all symbols are positive. This allows for rewriting, for instance,
     # `Max(1, ceiling(x/2))` into `ceiling(x/2)`.
     expr = expr.subs(symbol_mapping)
-    expr = sympy.simplify(expr)
+    expr = ixs_simplify(expr)
 
     # Expressions with integer denominators (e.g. BLOCK_K/32, or compound
     # expressions like A + B*floor(T/64)/2) cannot be represented directly in
