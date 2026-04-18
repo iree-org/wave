@@ -94,6 +94,8 @@ module {
     // need when bounds come from affine.apply on gpu.block_id.)
     // CHECK-LABEL: waveasm.program @scf_if_vgpr_cond_to_wave_if
     gpu.func @scf_if_vgpr_cond_to_wave_if() kernel {
+      %arg0 = arith.constant 5 : i32
+      %arg1 = arith.constant 3 : i32
       %c10 = arith.constant 10 : index
       %tid_x = gpu.thread_id x upper_bound 64
       %cond = arith.cmpi slt, %tid_x, %c10 : index
@@ -102,11 +104,13 @@ module {
       // CHECK:      %[[COND_VGPR:.*]] = waveasm.v_cndmask_b32 {{.*}} -> !waveasm.vreg
       // CHECK:      %[[COND_SGPR:.*]] = waveasm.v_readfirstlane_b32 %[[COND_VGPR]] : !waveasm.vreg -> !waveasm.sreg
       // CHECK:      %[[COND_SCC:.*]] = waveasm.s_cmp_ne_u32 %[[COND_SGPR]], %{{.*}} : !waveasm.sreg, !waveasm.imm<0> -> !waveasm.scc
-      // CHECK:      waveasm.if %[[COND_SCC]] : !waveasm.scc
-      scf.if %cond {
-        %c0_i32 = arith.constant 0 : i32
-        %c1_i32 = arith.constant 1 : i32
-        %sum = arith.addi %c0_i32, %c1_i32 : i32
+      // CHECK:      %{{.*}} = waveasm.if %[[COND_SCC]] : !waveasm.scc -> !waveasm.vreg {
+      %result = scf.if %cond -> i32 {
+        %sum = arith.addi %arg0, %arg1 : i32
+        scf.yield %sum : i32
+      } else {
+        %diff = arith.subi %arg0, %arg1 : i32
+        scf.yield %diff : i32
       }
 
       // CHECK: waveasm.s_endpgm
