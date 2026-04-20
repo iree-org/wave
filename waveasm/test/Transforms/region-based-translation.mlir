@@ -85,13 +85,13 @@ module {
       gpu.return
     }
 
-    // --- scf.if with VGPR condition -> waveasm.if expects SCC/SGPR ---
-    // When arith.cmpi takes the vector path (one operand is a VGPR, e.g. from
-    // gpu.thread_id), its result is a boolean VGPR.  waveasm.if requires an SCC
-    // or SGPR condition, so the lowering must coerce the VGPR through
-    // v_readfirstlane_b32 -> s_cmp_ne_u32.  (This mirrors the VGPR upper-bound
-    // handling in buildLoopFromSCFFor, and is what post-rebase split-K kernels
-    // need when bounds come from affine.apply on gpu.block_id.)
+    // --- scf.if with VGPR-operand cmpi -> waveasm.if expects SCC/SGPR ---
+    // When arith.cmpi takes a VGPR operand (e.g. from gpu.thread_id) and all
+    // uses feed scf.if, the lowering promotes each VGPR operand through
+    // v_readfirstlane_b32 and emits the s_cmp_* variant for the predicate
+    // directly, producing SCC without an intermediate boolean VGPR.  This is
+    // what post-rebase split-K kernels need when bounds come from
+    // affine.apply on gpu.block_id / gpu.thread_id.
     // CHECK-LABEL: waveasm.program @scf_if_vgpr_cond_to_wave_if
     gpu.func @scf_if_vgpr_cond_to_wave_if() kernel {
       %arg0 = arith.constant 5 : i32
@@ -100,10 +100,9 @@ module {
       %tid_x = gpu.thread_id x upper_bound 64
       %cond = arith.cmpi slt, %tid_x, %c10 : index
 
-      // Vector cmp produces a boolean VGPR, which must be coerced to SCC.
-      // CHECK:      %[[COND_VGPR:.*]] = waveasm.v_cndmask_b32 {{.*}} -> !waveasm.vreg
-      // CHECK:      %[[COND_SGPR:.*]] = waveasm.v_readfirstlane_b32 %[[COND_VGPR]] : !waveasm.vreg -> !waveasm.sreg
-      // CHECK:      %[[COND_SCC:.*]] = waveasm.s_cmp_ne_u32 %[[COND_SGPR]], %{{.*}} : !waveasm.sreg, !waveasm.imm<0> -> !waveasm.scc
+      // Direct VGPR-operand promotion: readfirstlane the VGPR, then s_cmp_*.
+      // CHECK:      %[[COND_SGPR:.*]] = waveasm.v_readfirstlane_b32 %{{.*}} : !waveasm.vreg -> !waveasm.sreg
+      // CHECK:      %[[COND_SCC:.*]] = waveasm.s_cmp_lt_i32 %[[COND_SGPR]], %{{.*}} : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
       // CHECK:      %{{.*}} = waveasm.if %[[COND_SCC]] : !waveasm.scc -> !waveasm.vreg {
       %result = scf.if %cond -> i32 {
         %sum = arith.addi %arg0, %arg1 : i32
