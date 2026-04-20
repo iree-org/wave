@@ -3646,7 +3646,7 @@ def testSplitKGemm(
         ((256, 256, 256), 2),
         ((256, 256, 512), 4),
         ((256, 256, 1024), 4),
-        ((512, 512, 1024), 2),
+        ((512, 512, 1024), 4),
     ],
 )
 @pytest.mark.parametrize("output_type", [torch.float32, torch.bfloat16])
