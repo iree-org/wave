@@ -1803,6 +1803,7 @@ def test_splitk_mxfp4_bf16_atomic_cpp_backend(
     import torch
     from torch.testing import assert_close
 
+    import wave_lang.kernel.lang as tkl
     from wave_lang.kernel.wave.constraints import ScaledMMAType
     from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
     from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
@@ -1818,6 +1819,7 @@ def test_splitk_mxfp4_bf16_atomic_cpp_backend(
         shape,
         num_splits=num_splits,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+        output_type=tkl.bf16,
     )
 
     options.backend = "asm"
@@ -1906,6 +1908,7 @@ def test_splitk_mxfp4_bf16_asm_emission(
     if not is_cdna4():
         pytest.skip("Split-K MXFP4 with bf16 atomics requires gfx950+ (CDNA4)")
 
+    import wave_lang.kernel.lang as tkl
     from wave_lang.kernel.wave.constraints import ScaledMMAType
     from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_schedule
     from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
@@ -1917,6 +1920,7 @@ def test_splitk_mxfp4_bf16_asm_emission(
         shape,
         num_splits=num_splits,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
+        output_type=tkl.bf16,
     )
 
     options.backend = "asm"
@@ -2004,6 +2008,7 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
     import torch
     from torch.testing import assert_close
 
+    import wave_lang.kernel.lang as tkl
     from wave_lang.kernel.wave.constraints import ScaledMMAType
     from wave_lang.kernel.wave.schedules import get_mxfp4_dbuf_pingpong_schedule
     from wave_lang.kernel.wave.templates.tagged_mxfp4_gemm import (
@@ -2021,6 +2026,7 @@ def test_splitk_mxfp4_preshuffle_scales_cpp_backend(
         num_splits=num_splits,
         mfma_variant=ScaledMMAType.F32_16x16x128_F8F6F4,
         block_shape=(128, 128, 256),
+        output_type=tkl.bf16,
     )
 
     options.backend = "asm"
