@@ -12,20 +12,18 @@
 
 // CHECK-LABEL: waveasm.program @if_result_feeds_loop
 
-// The if-op result must get its physical register from the allocation
-// mapping, which ties it to the loop block arg.  Capture the if-result
-// physical register index as IF_REG.
+// The if-op result must get its physical register from the allocation mapping.
 // CHECK:       waveasm.if {{.*}} -> !waveasm.pareg<[[IF_REG:[0-9]+]], 4>
 
-// The then-yield (from MFMA) carries a *different* physical register.
-// CHECK:         waveasm.v_mfma_scale_f32_16x16x128_f8f6f4 {{.*}} -> !waveasm.pareg<[[MFMA_REG:[0-9]+]], 4>
-// CHECK-NEXT:    waveasm.yield {{.*}} : !waveasm.pareg<[[MFMA_REG]], 4>
+// The then-yield carries the if-result register.
+// CHECK:         waveasm.v_mfma_scale_f32_16x16x128_f8f6f4 {{.*}} -> !waveasm.pareg<[[IF_REG]], 4>
+// CHECK-NEXT:    waveasm.yield {{.*}} : !waveasm.pareg<[[IF_REG]], 4>
 
 // The loop init arg type must exactly match the if-result type (IF_REG).
-// CHECK:       waveasm.loop ({{.*}}!waveasm.pareg<[[IF_REG]], 4>) -> ({{.*}}!waveasm.pareg<[[IF_REG]], 4>)
+// CHECK:       waveasm.loop ({{.*}}!waveasm.pareg<[[IF_REG]], 4>) -> ({{.*}}!waveasm.pareg<[[LOOP_REG:[0-9]+]], 4>)
 
-// Inside the loop body, the block arg fed to MFMA must also be pareg<IF_REG, 4>.
-// CHECK:         waveasm.v_mfma_scale_f32_16x16x128_f8f6f4 {{.*}}!waveasm.pareg<[[IF_REG]], 4>{{.*}} -> !waveasm.pareg<[[IF_REG]], 4>
+// Inside the loop body, the MFMA uses and produces the loop iter-arg register.
+// CHECK:         waveasm.v_mfma_scale_f32_16x16x128_f8f6f4 {{.*}}!waveasm.pareg<[[LOOP_REG]], 4>{{.*}} -> !waveasm.pareg<[[LOOP_REG]], 4>
 
 waveasm.program @if_result_feeds_loop
   target = #waveasm.target<#waveasm.gfx950, 5>

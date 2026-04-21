@@ -745,6 +745,44 @@ LivenessInfo computeLiveness(ProgramOp program) {
     }
   });
 
+  // Pass 3c: Remove IfOp result ranges from the allocation worklist.
+  //
+  // IfOp results alias the then-yield operands. Without this, the
+  // allocator gives them fresh registers because their start point (the
+  // IfOp index) precedes the then-block contents. This wastes registers
+  // and introduces non-determinism (N results with identical sort keys
+  // get shuffled by DenseMap iteration order).
+  //
+  // Post-allocation, LinearScanPass assigns IfOp result types from the
+  // then-yield operand types. The else-branch copies (if needed) are
+  // emitted by AssemblyEmitter.
+  program.walk([&](IfOp ifOp) {
+    auto thenYield = dyn_cast<YieldOp>(ifOp.getThenBlock().getTerminator());
+    if (!thenYield)
+      return;
+
+    for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
+      if (i >= thenYield.getResults().size())
+        break;
+      Value ifResult = ifOp->getResult(i);
+      Value yieldOperand = thenYield.getResults()[i];
+      auto resultIt = info.ranges.find(ifResult);
+      auto yieldIt = info.ranges.find(yieldOperand);
+      if (resultIt == info.ranges.end())
+        continue;
+
+      if (yieldIt != info.ranges.end()) {
+        // Extend the yield operand's range to cover the ifOp result's
+        // full lifetime, since they will share the same physical register.
+        yieldIt->second.start =
+            std::min(yieldIt->second.start, resultIt->second.start);
+        yieldIt->second.end =
+            std::max(yieldIt->second.end, resultIt->second.end);
+      }
+      info.ranges.erase(resultIt);
+    }
+  });
+
   // Pass 4: Categorize ranges by register class and sort by start
   for (const auto &[value, range] : info.ranges) {
     if (range.regClass == RegClass::VGPR) {
