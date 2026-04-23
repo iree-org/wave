@@ -25,7 +25,6 @@ def get_reordered_matmul(
     input_dtype: torch.dtype = torch.float16,
     output_dtype: torch.dtype = torch.float32,
 ):
-
     # Initializing dtypes
     input_wtype = torch_dtype_to_wave(input_dtype)
     output_wtype = torch_dtype_to_wave(output_dtype)
