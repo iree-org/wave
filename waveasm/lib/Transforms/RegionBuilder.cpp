@@ -347,6 +347,12 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
   // immediate placeholders, SGPRs used as booleans) are coerced here.
   // VGPR path mirrors buildLoopFromSCFFor's VGPR upper-bound handling:
   // v_readfirstlane_b32 then s_cmp_ne_u32 with 0 to set SCC.
+  //
+  // INVARIANT: the VGPR condition must be workgroup-uniform (all lanes hold
+  // the same value).  V_READFIRSTLANE_B32 reads only lane 0; if lanes
+  // diverge the scalar branch will follow lane 0's path for every lane,
+  // silently miscompiling.  This is safe for split-K trip-count tests
+  // (derived from workgroup_id).  Do NOT feed lane-varying conditions here.
   Value conditionValue = *condition;
   auto condType = conditionValue.getType();
   if (!isSCCType(condType)) {

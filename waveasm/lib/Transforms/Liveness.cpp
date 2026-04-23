@@ -747,15 +747,28 @@ LivenessInfo computeLiveness(ProgramOp program) {
 
   // Pass 3c: Remove IfOp result ranges from the allocation worklist.
   //
-  // IfOp results alias the then-yield operands. Without this, the
-  // allocator gives them fresh registers because their start point (the
-  // IfOp index) precedes the then-block contents. This wastes registers
-  // and introduces non-determinism (N results with identical sort keys
-  // get shuffled by DenseMap iteration order).
+  // --- IfOp result aliasing contract ---
+  // IfOp results are not independently allocated.  Instead, they alias
+  // the then-yield operands via a three-pass protocol:
   //
-  // Post-allocation, LinearScanPass assigns IfOp result types from the
-  // then-yield operand types. The else-branch copies (if needed) are
-  // emitted by AssemblyEmitter.
+  //   1. Liveness (here, Pass 3c): merge each IfOp result's live range
+  //      into the corresponding then-yield operand's range, then erase
+  //      the result range so LinearScan never sees it.
+  //   2. LinearScanPass: after allocation, walk IfOps and assign each
+  //      result the same physical register as its then-yield operand.
+  //   3. AssemblyEmitter: at both then- and else-branch exits, emit
+  //      register copies from yield values to result registers when
+  //      they differ (emitYieldToResultCopies).
+  //
+  // Any pass inserted between liveness and emission that reads or
+  // mutates IfOp result types/registers must respect this aliasing --
+  // IfOp results have no independent allocation.
+  // --- end contract ---
+  //
+  // Without this, the allocator gives them fresh registers because their
+  // start point (the IfOp index) precedes the then-block contents.
+  // This wastes registers and introduces non-determinism (N results with
+  // identical sort keys get shuffled by DenseMap iteration order).
   program.walk([&](IfOp ifOp) {
     auto thenYield = dyn_cast<YieldOp>(ifOp.getThenBlock().getTerminator());
     if (!thenYield)
@@ -771,6 +784,10 @@ LivenessInfo computeLiveness(ProgramOp program) {
       if (resultIt == info.ranges.end())
         continue;
 
+      assert(yieldIt != info.ranges.end() &&
+             "IfOp result has a live range but its corresponding then-yield "
+             "operand does not -- the yield value must be live for the "
+             "aliasing contract to hold");
       if (yieldIt != info.ranges.end()) {
         // Extend the yield operand's range to cover the ifOp result's
         // full lifetime, since they will share the same physical register.

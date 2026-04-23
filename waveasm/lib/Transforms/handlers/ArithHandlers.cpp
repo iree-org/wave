@@ -397,9 +397,15 @@ LogicalResult handleArithCmpI(Operation *op, TranslationContext &ctx) {
   // When a comparison with VGPR operands is used only by scf.if, promote the
   // operands to SGPRs via V_READFIRSTLANE_B32 and use S_CMP.  This avoids
   // the round-trip through VCC -> bool VGPR -> V_READFIRSTLANE -> S_CMP that
-  // buildIfFromSCFIf would otherwise need, reducing SGPR pressure.  The
-  // values must be workgroup-uniform for correctness (split-K trip-count
-  // comparisons satisfy this since they derive from workgroup_id).
+  // buildIfFromSCFIf would otherwise need, reducing SGPR pressure.
+  //
+  // INVARIANT: the VGPR operands must be workgroup-uniform (all lanes hold
+  // the same value).  V_READFIRSTLANE_B32 reads lane 0 and broadcasts it to
+  // the SGPR; if lanes diverge, the scalar comparison will use only lane 0's
+  // value and the branch decision will be wrong for other lanes.  Currently
+  // this is satisfied because split-K trip-count comparisons derive entirely
+  // from workgroup_id (uniform by construction).  Do NOT route lane-varying
+  // comparisons through this path.
   bool allUsesAreScfIf = !cmpOp.getResult().use_empty();
   for (Operation *user : cmpOp.getResult().getUsers()) {
     if (!isa<scf::IfOp>(user)) {
