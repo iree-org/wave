@@ -1269,8 +1269,8 @@ def _get_tagged_streamk_mxfp4_gemm_impl(
 
     c_write_mapping = tkw.IndexMapping(
         num_iterators=2,
-        inputs={M: i, N: j},
-        outputs={M: i + CTA_M_OFFSET, N: j + CTA_N_OFFSET},
+        inputs={M: i + CTA_M_OFFSET, N: j + CTA_N_OFFSET},
+        outputs={M: i, N: j},
     )
 
     # Address spaces: scales from global when preshuffled.

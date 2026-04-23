@@ -598,7 +598,7 @@ def handle_atomic_op(op):
             if mapping:
                 symbolic_shape = get_custom(node).type.symbolic_shape
                 start_index = transform_index_on_mapping(
-                    mapping, symbolic_shape, start_index, is_read=False
+                    mapping, symbolic_shape, start_index, is_read=True
                 )
             else:
                 start_index = {
