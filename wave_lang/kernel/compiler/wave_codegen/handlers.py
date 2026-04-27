@@ -1556,6 +1556,7 @@ def handle_iterate(emitter: WaveEmitter, node: fx.Node):
         [a.ir_value for a in flat_init_args],
     )
     emitter.induction_vars[axis] = forOp.induction_variable
+    emitter.iv_offset_cache.clear()
     with InsertionPoint(forOp.body):
         # Add mapping for iter args.
         subgraph: fx.Graph = emitter.trace.get_subgraph(subgraph)
@@ -1659,6 +1660,7 @@ def handle_iterate_while(emitter: WaveEmitter, node: fx.Node):
 
         # Map the iteration variable
         emitter.induction_vars[axis] = current_values[-1]
+        emitter.iv_offset_cache.clear()
 
         # Map the iteration arguments
         iter_args = get_custom(node).iter_args(subgraph)

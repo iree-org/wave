@@ -96,14 +96,14 @@ def test_scaled_gemm_mxfp4():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL: test_scaled_gemm_mxfp4
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 * 16384 + s1 * 512 + (s1 floordiv 64) * 8128 - (s1 floordiv 16) * 8176)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 * 1024 + s1 * 32 + (s1 floordiv 64) * 508 - (s1 floordiv 16) * 511)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 16384 + s1 * 8192 + s2 * 512 - (s2 floordiv 64) * 64 - (s2 floordiv 16) * 8176)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 1024 + s1 * 512 + s2 * 32 - (s2 floordiv 64) * 4 - (s2 floordiv 16) * 511)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 16384 + s1 * 512 + s2 * 64 + (s1 floordiv 64) * 8128 - (s1 floordiv 16) * 8176)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 1024 + s1 * 32 + s2 * 4 + (s1 floordiv 64) * 508 - (s1 floordiv 16) * 511)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2, s3] -> (s0 * 16384 + s1 * 8192 + s2 * 512 + s3 * 64 - (s2 floordiv 64) * 64 - (s2 floordiv 16) * 8176)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2, s3] -> (s0 * 1024 + s1 * 512 + s2 * 32 + s3 * 4 - (s2 floordiv 64) * 4 - (s2 floordiv 16) * 511)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>
@@ -196,16 +196,17 @@ def test_scaled_gemm_mxfp8():
     print(scaled_gemm.asm)
 
     # CHECK-LABEL: test_scaled_gemm_mxfp8
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32768 + s1 * 1024 + (s1 floordiv 64) * 16320 - (s1 floordiv 16) * 16368)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 * 32768 + s1 * 1024 + (s1 floordiv 64) * 16320 - (s1 floordiv 16) * 16368 + 64)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 * 1024 + s1 * 32 + (s1 floordiv 64) * 508 - (s1 floordiv 16) * 511)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 32768 + s1 * 16384 + s2 * 1024 - (s2 floordiv 64) * 64 - (s2 floordiv 16) * 16368)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 32768 + s1 * 16384 + s2 * 1024 - (s2 floordiv 64) * 64 - (s2 floordiv 16) * 16368 + 64)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 1024 + s1 * 512 + s2 * 32 - (s2 floordiv 64) * 4 - (s2 floordiv 16) * 511)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 mod 16 + (s0 floordiv 64) * 16)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (((s0 mod 64) floordiv 16) * 16 + 64)>
+    # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 mod 64) floordiv 16)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1] -> (s0 + s1 * 16 - (s0 floordiv 16) * 16)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 32768 + s1 * 1024 + s2 * 128 + (s1 floordiv 64) * 16320 - (s1 floordiv 16) * 16368)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 32768 + s1 * 1024 + s2 * 128 + (s1 floordiv 64) * 16320 - (s1 floordiv 16) * 16368 + 64)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2] -> (s0 * 1024 + s1 * 32 + s2 * 4 + (s1 floordiv 64) * 508 - (s1 floordiv 16) * 511)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2, s3] -> (s0 * 32768 + s1 * 16384 + s2 * 1024 + s3 * 128 - (s2 floordiv 64) * 64 - (s2 floordiv 16) * 16368)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2, s3] -> (s0 * 32768 + s1 * 16384 + s2 * 1024 + s3 * 128 - (s2 floordiv 64) * 64 - (s2 floordiv 16) * 16368 + 64)>
-    # CHECK-DAG:    #{{.*}} = affine_map<()[s0, s1, s2, s3] -> (s0 * 1024 + s1 * 512 + s2 * 32 + s3 * 4 - (s2 floordiv 64) * 4 - (s2 floordiv 16) * 511)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> (s0 * 32)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4)>
     # CHECK-DAG:    #{{.*}} = affine_map<()[s0] -> ((s0 floordiv 64) * 16 + ((s0 mod 64) floordiv 16) * 4 + 1)>

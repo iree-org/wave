@@ -76,7 +76,7 @@ from ...lang.wave_types import IndexSymbol
 from ...wave.compile_options import WaveCompileOptions
 from ...wave.constraints import Constraint, HardwareConstraint, TilingConstraint
 from ...wave.utils.general_utils import get_hardware_constraint
-from ...wave.utils.symbol_utils import subs_idxc, is_literal
+from ...wave.utils.symbol_utils import safe_subs, subs_idxc, is_literal
 
 logger = get_logger("wave.ops_location_check")
 
@@ -105,6 +105,7 @@ class WaveEmitter:
         self.dynamic_symbols = self.options.dynamic_symbols
         self.induction_vars: dict[IndexSymbol, Value] = {}
         self.dynamic_dims: dict[IndexSymbol, Value] = {}
+        self.iv_offset_cache: dict[sympy.Expr, Value] = {}
 
     def emit_program_invariants(self):
         grid = self.grid
@@ -669,8 +670,13 @@ def _group_same_denom_fractions(expr):
     return sympy.Add(*new_terms)
 
 
-def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Value:
-    use_affine_expr = _use_affine_expr
+def gen_sympy_index(
+    dynamics: dict[IndexSymbol, Value],
+    expr: sympy.Expr,
+    *,
+    use_affine: bool | None = None,
+) -> Value:
+    use_affine_expr = use_affine if use_affine is not None else _use_affine_expr
     stack: list[OpResult] = []
 
     def _get_ir_value(arg) -> Value:
@@ -1192,6 +1198,138 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
         stack[0] = _floor(stack[0])
 
     return _get_ir_value(stack[0])
+
+
+def _broadcast_pair(a: Value, b: Value) -> tuple[Value, Value]:
+    """Broadcast two values so their types match.
+
+    Handles the scalar-vs-vector case that arises when combining a
+    hoisted base (possibly vector) with a loop-variant stride (scalar).
+    Mirrors the logic in ``gen_sympy_index``'s inner ``_broadcast``,
+    including the vector-extract-and-rebroadcast for shape-[1] vectors.
+    """
+    a_vec = isinstance(a.type, VectorType)
+    b_vec = isinstance(b.type, VectorType)
+    if a_vec and not b_vec:
+        b = vector_d.broadcast(a.type, b)
+    elif b_vec and not a_vec:
+        a = vector_d.broadcast(b.type, a)
+    elif a_vec and b_vec and a.type != b.type:
+        if a.type.shape == [1]:
+            a_scalar = vector_d.extract(a, static_position=[0], dynamic_position=[])
+            a = vector_d.broadcast(b.type, a_scalar)
+        elif b.type.shape == [1]:
+            b_scalar = vector_d.extract(b, static_position=[0], dynamic_position=[])
+            b = vector_d.broadcast(a.type, b_scalar)
+        else:
+            assert a.type == b.type, (
+                f"_broadcast_pair: incompatible vector shapes "
+                f"{a.type} vs {b.type} -- neither is scalar or rank-1 broadcastable"
+            )
+    return a, b
+
+
+def gen_sympy_index_hoisted(
+    dynamics: dict[IndexSymbol, Value],
+    expr: sympy.Expr,
+    *,
+    iv_sym: IndexSymbol | None = None,
+    iv_val: Value | None = None,
+    iv_stride: sympy.Expr | None = None,
+    hoist_ip: InsertionPoint | None = None,
+    all_iv_syms: set[IndexSymbol] | None = None,
+    iv_offset_cache: dict[sympy.Expr, Value] | None = None,
+) -> Value:
+    """Loop-aware variant of ``gen_sympy_index`` that hoists the base.
+
+    When *iv_sym* is provided and the expression depends on it, the
+    expression is split into ``base + iv * stride``:
+
+    - *base* is generated at *hoist_ip* (before the enclosing loop).
+    - ``iv * stride`` is generated at the current insertion point using
+      plain ``arith`` ops so that LICM can reason about them independently.
+
+    If *iv_stride* is given (from ``annotate_iv_strides``), it is used
+    directly.  Otherwise the stride is extracted via ``sympy.expand`` /
+    ``coeff``.
+
+    *iv_offset_cache*, when provided, deduplicates the ``iv * stride``
+    product across calls that share the same stride coefficient within
+    a single loop body.
+
+    Falls back to ``gen_sympy_index`` when not inside a loop or when the
+    expression does not depend on the IV.
+    """
+    if iv_sym is None or iv_val is None or hoist_ip is None:
+        return gen_sympy_index(dynamics, expr)
+
+    expanded = sympy.expand(sympy.sympify(expr))
+    if iv_sym not in expanded.free_symbols:
+        return gen_sympy_index(dynamics, expr)
+
+    if iv_stride is not None:
+        coeff = iv_stride
+        base_expr = safe_subs(expanded, {iv_sym: sympy.Integer(0)})
+        reconstructed = sympy.expand(base_expr + coeff * iv_sym)
+        if reconstructed != expanded:
+            return gen_sympy_index(dynamics, expr)
+    else:
+        coeff = expanded.coeff(iv_sym)
+        if coeff == 0 or iv_sym in sympy.sympify(coeff).free_symbols:
+            return gen_sympy_index(dynamics, expr)
+        base_expr = expanded - coeff * iv_sym
+        if iv_sym in sympy.sympify(base_expr).free_symbols:
+            return gen_sympy_index(dynamics, expr)
+
+    iv_check_syms = all_iv_syms if all_iv_syms is not None else {iv_sym}
+    if iv_check_syms.intersection(sympy.sympify(base_expr).free_symbols):
+        return gen_sympy_index(dynamics, expr)
+
+    # nsw|nuw is safe here: Wave's tiling guarantees that loop induction
+    # variables, strides, and base offsets stay within the bounds of the
+    # allocated tensor dimensions, so the products and sums below cannot
+    # overflow a 64-bit index.  The flags allow LLVM to fold redundant
+    # sign/zero-extension and improve LICM for the downstream backend.
+    overflow_flags = arith_d.IntegerOverflowFlags.nsw | arith_d.IntegerOverflowFlags.nuw
+
+    with hoist_ip:
+        base_val = gen_sympy_index(dynamics, base_expr)
+
+    coeff_key = sympy.sympify(coeff)
+    if iv_offset_cache is not None and coeff_key in iv_offset_cache:
+        iv_offset = iv_offset_cache[coeff_key]
+    else:
+        stride_val = gen_sympy_index(dynamics, coeff)
+        iv_offset = arith_d.muli(iv_val, stride_val, overflow_flags=overflow_flags)
+        if iv_offset_cache is not None:
+            iv_offset_cache[coeff_key] = iv_offset
+
+    base_val, iv_offset = _broadcast_pair(base_val, iv_offset)
+    return arith_d.addi(base_val, iv_offset, overflow_flags=overflow_flags)
+
+
+def gen_sympy_index_no_affine(
+    dynamics: dict[IndexSymbol, Value],
+    expr: sympy.Expr,
+) -> Value:
+    """Like ``gen_sympy_index`` but forces arith-only mode (no affine.apply).
+
+    Use inside loop bodies to avoid ``affine.apply`` without hoisting,
+    which would extend live ranges and increase register pressure.
+    """
+    return gen_sympy_index(dynamics, expr, use_affine=False)
+
+
+def gen_sympy_index_no_affine(
+    dynamics: dict[IndexSymbol, Value],
+    expr: sympy.Expr,
+) -> Value:
+    """Like ``gen_sympy_index`` but forces arith-only mode (no affine.apply).
+
+    Use inside loop bodies to avoid ``affine.apply`` without hoisting,
+    which would extend live ranges and increase register pressure.
+    """
+    return gen_sympy_index(dynamics, expr, use_affine=False)
 
 
 def get_constant_attr(value: Any, element_type: IrType) -> Attribute:
