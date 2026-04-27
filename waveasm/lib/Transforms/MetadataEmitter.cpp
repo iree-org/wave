@@ -20,6 +20,20 @@ using namespace mlir;
 
 namespace waveasm {
 
+static bool supportsKernargPreload(TargetAttrInterface target) {
+  return target.hasFeature(TargetFeature::HasKernargPreload);
+}
+
+static bool usesCDNAAccumOffset(TargetAttrInterface target) {
+  return llvm::isa<GFX90ATargetAttr, GFX942TargetAttr, GFX950TargetAttr>(
+      target);
+}
+
+static bool
+supportsArchitectedFlatScratchDirectives(TargetAttrInterface target) {
+  return !llvm::isa<GFX90ATargetAttr>(target);
+}
+
 //===----------------------------------------------------------------------===//
 // Instruction Formatter Implementation
 //===----------------------------------------------------------------------===//
@@ -138,7 +152,7 @@ static void scanSystemRegisterUsage(ProgramOp program, bool &usesWorkgroupIdX,
 
   auto targetAttr = program.getTarget();
   auto targetKind = targetAttr.getTargetKind();
-  bool isGfx950 = llvm::isa<GFX950TargetAttr>(targetKind);
+  bool usePreloading = supportsKernargPreload(targetKind);
 
   int64_t numArgs = 2;
   if (auto numArgsAttr =
@@ -147,8 +161,8 @@ static void scanSystemRegisterUsage(ProgramOp program, bool &usesWorkgroupIdX,
   }
 
   int64_t userSgprCount = 2;
-  if (isGfx950) {
-    // Hardware limits user SGPRs to 16 on gfx950.
+  if (usePreloading) {
+    // Hardware limits user SGPRs to 16 on preload targets.
     userSgprCount = std::min(int64_t(16), 2 + numArgs * 2);
   }
 
@@ -207,7 +221,7 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   auto targetAttr = program.getTarget();
   auto targetKind = targetAttr.getTargetKind();
   int64_t preloadLength = program.getKernargPreloadLength();
-  bool usePreloading = llvm::isa<GFX950TargetAttr>(targetKind);
+  bool usePreloading = supportsKernargPreload(targetKind);
 
   if (usePreloading && preloadLength == 0) {
     int64_t numArgs = 2;
@@ -215,8 +229,9 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
             program->getAttrOfType<IntegerAttr>("num_kernel_args")) {
       numArgs = numArgsAttr.getInt();
     }
-    // Hardware limits user SGPRs to 16 on gfx950 (2 for kernarg ptr + 14 max
-    // preloaded). Overflow args are loaded via explicit s_load in the prologue.
+    // Hardware limits user SGPRs to 16 on preload targets (2 for kernarg ptr
+    // + 14 max preloaded). Overflow args are loaded via explicit s_load in the
+    // prologue.
     preloadLength = std::min(int64_t(14), numArgs * 2);
   }
 
@@ -239,10 +254,11 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
 
   lines.push_back("  .amdhsa_user_sgpr_private_segment_size 0");
   lines.push_back("  .amdhsa_uses_dynamic_stack 0");
-  lines.push_back("  .amdhsa_enable_private_segment 0");
+  if (supportsArchitectedFlatScratchDirectives(targetKind))
+    lines.push_back("  .amdhsa_enable_private_segment 0");
 
   int64_t vgprGranularity = 4;
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
+  if (usesCDNAAccumOffset(targetKind)) {
     vgprGranularity = 8;
   }
   int64_t nextFreeVGPR =
@@ -253,11 +269,11 @@ MetadataEmitter::emitKernelDescriptor(int64_t peakVGPRs, int64_t peakSGPRs,
   int64_t sgprGranularity = 8;
   int64_t nextFreeSGPR =
       ((peakSGPRs + sgprGranularity - 1) / sgprGranularity) * sgprGranularity;
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
+  if (usesCDNAAccumOffset(targetKind)) {
     nextFreeSGPR = std::min(nextFreeSGPR, int64_t(102));
   }
 
-  if (llvm::isa<GFX942TargetAttr, GFX950TargetAttr>(targetKind)) {
+  if (usesCDNAAccumOffset(targetKind)) {
     int64_t accumOffset = std::max(int64_t(4), ((nextFreeVGPR + 3) / 4) * 4);
     accumOffset = std::min(accumOffset, int64_t(256));
     lines.push_back("  .amdhsa_accum_offset " + std::to_string(accumOffset));

@@ -27,7 +27,6 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -162,12 +161,21 @@ void TranslationContext::emitSRDPrologue() {
   srdPrologueEmitted = true;
   auto loc = builder.getUnknownLoc();
 
-  bool isGFX95 = llvm::isa<GFX950TargetAttr>(target);
-  bool usePreloading = isGFX95;
+  // Targets with kernel argument preload require the preload prologue pattern
+  // with branch+alignment. gfx90a intentionally uses the non-preload path.
+  // Keep the gfx950 type check as a fallback while target feature plumbing is
+  // being migrated across commits.
+  bool supportsKernargPreload =
+      target.hasFeature(TargetFeature::HasKernargPreload) ||
+      llvm::isa<GFX950TargetAttr>(target);
 
   // Recompute SRD base indices now that we know the total number of args.
   // SRDs must start after: user SGPRs + system SGPRs (workgroup IDs).
-  int64_t userSgprCount = getUserSgprCount();
+  size_t numPreloadedArgs = getNumKernelArgs();
+  int64_t userSgprCount = 2; // kernarg ptr
+  if (supportsKernargPreload) {
+    userSgprCount += std::min(int64_t(14), (int64_t)getNumKernelArgs() * 2);
+  }
   int64_t systemSgprCount = 3; // workgroup_id_x, y, z
   int64_t srdStartIndex =
       (userSgprCount + systemSgprCount + 3) & ~3; // Align to 4
@@ -199,72 +207,55 @@ void TranslationContext::emitSRDPrologue() {
   PrecoloredSRegOp::create(builder, loc, kernargPtrType, /*index=*/0,
                            /*size=*/2);
 
-  if (usePreloading) {
-    // Reserve preload SGPR pairs within the 16-SGPR hardware window
-    // so regalloc doesn't use them.
-    llvm::DenseSet<int64_t> reservedPreloadBases;
-    for (const auto &pending : pendingSRDs) {
-      int64_t preloadBase = 2 + pending.argIndex * 2;
+  if (supportsKernargPreload) {
+    // On targets with kernarg preload, the prologue loads kernarg data into
+    // preload locations s[2:3], s[4:5], etc. Reserve those pairs so regalloc
+    // doesn't use them. Hardware limits user SGPRs to 16 (s[0:15]), so only
+    // reserve preload slots for args that fit within the limit. Reserve all
+    // arg positions, not just pointer args with SRDs.
+    for (size_t i = 0; i < numPreloadedArgs; ++i) {
+      int64_t preloadBase = 2 + i * 2;
       if (preloadBase >= 16)
         continue;
-      if (reservedPreloadBases.insert(preloadBase).second) {
-        auto preloadType = createSRegType(2, 2);
-        PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
-                                 /*size=*/2);
-      }
-    }
-    for (const auto &pending : pendingScalarArgs) {
-      int64_t preloadBase = 2 + pending.argIndex * 2;
-      if (preloadBase >= 16)
-        continue;
-      if (reservedPreloadBases.insert(preloadBase).second) {
-        auto preloadType = createSRegType(2, 2);
-        PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
-                                 /*size=*/2);
-      }
+      auto preloadType = createSRegType(2, 2);
+      PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase,
+                               /*size=*/2);
     }
   }
 
-  if (usePreloading) {
-    // GFX95* preloading path with partial preloading: args that fit in
-    // s[2:15] are hardware-preloaded, overflow args are loaded via
-    // explicit s_load after the aligned entry point.
-
-    // Step 1: Load base addresses into preload locations.
+  if (supportsKernargPreload) {
+    // Kernarg preload path: Use preload pattern with intermediate locations
+    // and s_mov_b64 copies. This matches the Python backend behavior for
+    // gfx950.
+    //
+    // Step 1: Load all kernel args into preload locations s[2:3], s[4:5],
+    // etc. Capture SSA results so S_MOV_B64 ops below can reference them,
+    // keeping the loads live and preventing the register allocator from
+    // aliasing their destination registers.
     auto kernargSRegType = createSRegType(2, 2);
     auto kernargBase =
         PrecoloredSRegOp::create(builder, loc, kernargSRegType, 0, 2);
 
-    for (const auto &pending : pendingSRDs) {
-      int64_t loadBase = 2 + pending.argIndex * 2;
+    llvm::DenseMap<size_t, Value> argLoadResults;
+    for (size_t i = 0; i < numPreloadedArgs; ++i) {
+      int64_t loadBase = 2 + i * 2;
       if (loadBase >= 16)
-        continue;
-      int64_t kernargOffset = pending.argIndex * 8;
+        continue; // Overflow arg: loaded via s_load_dword path below.
+      int64_t kernargOffset = i * 8;
 
       auto loadDstType = createSRegType(2, loadBase);
       auto offsetImm = builder.getType<ImmType>(kernargOffset);
       auto offsetConst =
           ConstantOp::create(builder, loc, offsetImm, kernargOffset);
-      S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
-                             offsetConst);
+      auto loadOp = S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType},
+                                           kernargBase, offsetConst);
+      argLoadResults[i] = loadOp->getResult(0);
     }
 
-    // Also load scalar args that fit in the preload window.
-    for (const auto &pending : pendingScalarArgs) {
-      int64_t loadBase = 2 + pending.argIndex * 2;
-      if (loadBase >= 16)
-        continue;
-      int64_t kernargOffset = pending.argIndex * 8;
-
-      auto loadDstType = createSRegType(2, loadBase);
-      auto offsetImm = builder.getType<ImmType>(kernargOffset);
-      auto offsetConst =
-          ConstantOp::create(builder, loc, offsetImm, kernargOffset);
-      S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
-                             offsetConst);
-    }
-
-    // Step 2: Branch to aligned entry point (gfx95* requirement).
+    // Step 2: Branch to aligned entry point (kernarg preload requirement).
+    // Keep any high-SGPR overflow loads after the aligned entry; LLVM does the
+    // same, and loading them before the branch leaves the overflow arg stale
+    // on hardware with kernarg preload.
     std::string kernelName = getKernelName(program).str();
     std::string mainLabel = ".L_" + kernelName + "_main";
 
@@ -303,7 +294,10 @@ void TranslationContext::emitSRDPrologue() {
                       /*expcnt=*/IntegerAttr{});
 
     // Step 5: Copy from preload locations to SRD positions and fill
-    // size/stride. Use typed ops with DCEProtectOp to prevent elimination.
+    // size/stride. Use typed ops targeting precolored registers with
+    // DCEProtectOp to prevent elimination of Pure ops.
+    // When we have a captured S_LOAD_DWORDX2 result for this arg, use it
+    // directly as the S_MOV_B64 source to maintain the SSA def-use chain.
     for (size_t i = 0; i < pendingSRDs.size(); ++i) {
       const auto &pending = pendingSRDs[i];
       int64_t srdBase = pending.srdBaseIndex;
@@ -312,9 +306,15 @@ void TranslationContext::emitSRDPrologue() {
       auto srdType = createSRegType(4, 4);
       auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
-      auto preloadType = createSRegType(2, preloadBase);
-      auto preloadSrc =
-          PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase, 2);
+      Value preloadSrc;
+      auto loadIt = argLoadResults.find(pending.argIndex);
+      if (preloadBase < 16 && loadIt != argLoadResults.end()) {
+        preloadSrc = loadIt->second;
+      } else {
+        auto preloadType = createSRegType(2, preloadBase);
+        preloadSrc =
+            PrecoloredSRegOp::create(builder, loc, preloadType, preloadBase, 2);
+      }
       auto dstB64Type = PSRegType::get(builder.getContext(), srdBase, 2);
       auto movB64 = S_MOV_B64::create(builder, loc, dstB64Type, preloadSrc);
       DCEProtectOp::create(builder, loc, movB64);
@@ -359,33 +359,42 @@ void TranslationContext::emitSRDPrologue() {
       mapper.mapValue(pending.blockArg, vreg);
     }
   } else {
-    // Direct-load path (non-GFX950 targets):
-    // Load base addresses directly into SRD[0:1] positions, then fill SRD[2:3].
+    // Non-preload path (e.g., gfx90a/gfx942): Load directly into SRD positions.
+    // This eliminates the s_mov_b64 copies by loading args directly into the
+    // SRD base addresses (SRD[0:1]), then only filling size/stride with
+    // s_mov_b32.
 
-    PrecoloredSRegOp::create(builder, loc, createSRegType(2, 2), 0, 2);
+    auto kernargSRegType = createSRegType(2, 2);
+    auto kernargBase =
+        PrecoloredSRegOp::create(builder, loc, kernargSRegType, 0, 2);
 
     for (const auto &pending : pendingSRDs) {
       int64_t srdBase = pending.srdBaseIndex;
       int64_t kernargOffset = pending.argIndex * 8;
 
-      auto pairType = PSRegType::get(builder.getContext(), srdBase, 2);
-      PrecoloredSRegOp::create(builder, loc, pairType, srdBase, 2);
-      RawOp::create(builder, loc,
-                    "s_load_dwordx2 s[" + std::to_string(srdBase) + ":" +
-                        std::to_string(srdBase + 1) + "], s[0:1], " +
-                        std::to_string(kernargOffset));
+      // Load directly into SRD base: s[srdBase:srdBase+1].
+      auto loadDstType = PSRegType::get(builder.getContext(), srdBase, 2);
+      auto offsetImm = builder.getType<ImmType>(kernargOffset);
+      auto offsetConst =
+          ConstantOp::create(builder, loc, offsetImm, kernargOffset);
+      S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType}, kernargBase,
+                             offsetConst);
     }
 
+    // Load scalar kernel arguments (index types) into pinned SGPRs after
+    // all SRDs. Must use RawOp + PrecoloredSRegOp so the register allocator
+    // does not move the load destinations away from the SGPRs that the
+    // subsequent RawOp v_mov_b32 references.
+    int64_t scalarSgprBase =
+        (srdStartIndex + (int64_t)pendingSRDs.size() * 4 + 3) & ~3;
     for (size_t i = 0; i < pendingScalarArgs.size(); ++i) {
       const auto &pending = pendingScalarArgs[i];
-      int64_t pairBase = overflowSgprBase + (int64_t)i * 2;
+      int64_t sgprIdx = scalarSgprBase + (int64_t)i;
       int64_t kernargOffset = pending.argIndex * 8;
 
-      auto pairType = PSRegType::get(builder.getContext(), pairBase, 2);
-      PrecoloredSRegOp::create(builder, loc, pairType, pairBase, 2);
+      PrecoloredSRegOp::create(builder, loc, createSRegType(1, 1), sgprIdx, 1);
       RawOp::create(builder, loc,
-                    "s_load_dwordx2 s[" + std::to_string(pairBase) + ":" +
-                        std::to_string(pairBase + 1) + "], s[0:1], " +
+                    "s_load_dword s" + std::to_string(sgprIdx) + ", s[0:1], " +
                         std::to_string(kernargOffset));
     }
 
@@ -420,16 +429,18 @@ void TranslationContext::emitSRDPrologue() {
 
     for (size_t i = 0; i < pendingScalarArgs.size(); ++i) {
       const auto &pending = pendingScalarArgs[i];
-      int64_t srcSgpr = overflowSgprBase + (int64_t)i * 2;
+      int64_t sgprIdx = scalarSgprBase + (int64_t)i;
 
       auto vregType = createVRegType();
       auto vreg =
           PrecoloredVRegOp::create(builder, loc, vregType, pending.argIndex, 1);
       RawOp::create(builder, loc,
                     "v_mov_b32 v" + std::to_string(pending.argIndex) + ", s" +
-                        std::to_string(srcSgpr));
+                        std::to_string(sgprIdx));
       mapper.mapValue(pending.blockArg, vreg);
     }
+
+    overflowSgprBase = scalarSgprBase;
   }
 
   // For the direct-load path, record the pinned SGPR reservations as
@@ -437,8 +448,8 @@ void TranslationContext::emitSRDPrologue() {
   // (they're Pure with no SSA users since the RawOp references registers
   // by string). The preloading path uses typed S_LOAD_DWORDX2 ops which
   // the allocator sees directly, so no extra attributes are needed.
-  if (!usePreloading && !pendingScalarArgs.empty()) {
-    int64_t scalarCount = (int64_t)pendingScalarArgs.size() * 2;
+  if (!supportsKernargPreload && !pendingScalarArgs.empty()) {
+    int64_t scalarCount = (int64_t)pendingScalarArgs.size();
     int64_t scalarEnd = overflowSgprBase + scalarCount;
     program->setAttr("min_sgprs", builder.getI64IntegerAttr(scalarEnd));
     program->setAttr("scalar_sgpr_base",

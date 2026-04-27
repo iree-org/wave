@@ -21,11 +21,23 @@ def get_waveasm_pkg_path() -> Path:
 
 def find_binary(name: str) -> str | None:
     """Returns the path to the waveasm binary with the given name."""
-    tool_path = get_waveasm_pkg_path() / "bin" / name
-    if not tool_path.is_file() or not os.access(tool_path, os.X_OK):
-        return None
+    waveasm_dir = os.getenv("WAVE_WAVEASM_DIR")
+    if waveasm_dir:
+        tool_path = Path(waveasm_dir) / "bin" / name
+        if tool_path.is_file() and os.access(tool_path, os.X_OK):
+            return str(tool_path)
 
-    return str(tool_path)
+    tool_path = get_waveasm_pkg_path() / "bin" / name
+    if tool_path.is_file() and os.access(tool_path, os.X_OK):
+        return str(tool_path)
+
+    repo_tool_path = (
+        Path(__file__).parent.parent.parent / "waveasm" / "build" / "bin" / name
+    )
+    if repo_tool_path.is_file() and os.access(repo_tool_path, os.X_OK):
+        return str(repo_tool_path)
+
+    return None
 
 
 @lru_cache

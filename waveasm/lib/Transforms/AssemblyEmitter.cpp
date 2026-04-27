@@ -40,6 +40,14 @@ KernelGenerator::KernelGenerator(ProgramOp program,
                                  TargetAttrInterface target)
     : program(program), mapping(mapping), target(target) {}
 
+std::string KernelGenerator::getTargetMnemonic(llvm::StringRef mnemonic) {
+  if (std::optional<std::string> targetName =
+          target.getTargetInstructionName(mnemonic)) {
+    return *targetName;
+  }
+  return mnemonic.str();
+}
+
 std::string KernelGenerator::resolveValue(Value value) {
   Type ty = value.getType();
 
@@ -1113,13 +1121,18 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           })
 
       .Default([&](Operation *defaultOp) -> std::optional<std::string> {
+        // Register alias and bookkeeping ops covered by NonEmittingOp trait.
+        if (defaultOp->hasTrait<OpTrait::NonEmittingOp>())
+          return std::nullopt;
+
         llvm::StringRef opName = defaultOp->getName().getStringRef();
         llvm::StringRef mnemonic = opName;
         if (opName.starts_with("waveasm."))
           mnemonic = opName.drop_front(8);
+        std::string targetMnemonic = getTargetMnemonic(mnemonic);
 
-        if (mnemonic.starts_with("v_cmp_")) {
-          std::string mnem64 = (mnemonic + "_e64").str();
+        if (llvm::StringRef(targetMnemonic).starts_with("v_cmp_")) {
+          std::string mnem64 = targetMnemonic + "_e64";
           llvm::SmallVector<std::string> operands;
           operands.push_back("vcc");
           for (Value operand : defaultOp->getOperands())
@@ -1127,7 +1140,7 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
           return formatter.format(mnem64, operands);
         }
 
-        return emitDefaultFormat(defaultOp, mnemonic);
+        return emitDefaultFormat(defaultOp, targetMnemonic);
       });
 }
 

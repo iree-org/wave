@@ -15,6 +15,8 @@ using namespace waveasm;
 TargetAttrInterface waveasm::getTargetKindAttr(mlir::MLIRContext *ctx,
                                                TargetKind targetKind) {
   switch (targetKind) {
+  case TargetKind::GFX90A:
+    return GFX90ATargetAttr::get(ctx);
   case TargetKind::GFX942:
     return GFX942TargetAttr::get(ctx);
   case TargetKind::GFX950:

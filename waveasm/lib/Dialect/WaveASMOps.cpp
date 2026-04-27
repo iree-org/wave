@@ -25,6 +25,29 @@ using namespace waveasm;
 // Verification is handled by TableGen-generated code for basic structure.
 // Custom verification can be added here if needed.
 
+LogicalResult ProgramOp::verify() {
+  TargetAttrInterface targetKind = getTarget().getTargetKind();
+  WalkResult result = walk([&](Operation *op) -> WalkResult {
+    if (op == getOperation())
+      return WalkResult::advance();
+
+    llvm::StringRef opName = op->getName().getStringRef();
+    if (!opName.starts_with("waveasm."))
+      return WalkResult::advance();
+
+    if (!targetKind.supportsInstruction(opName)) {
+      op->emitOpError() << "is not supported on target "
+                        << targetKind.getComputeArch() << " ("
+                        << targetKind.getTargetDirective() << ")";
+      return WalkResult::interrupt();
+    }
+
+    return WalkResult::advance();
+  });
+
+  return failure(result.wasInterrupted());
+}
+
 //===----------------------------------------------------------------------===//
 // MFMA Operation Verifiers
 //===----------------------------------------------------------------------===//

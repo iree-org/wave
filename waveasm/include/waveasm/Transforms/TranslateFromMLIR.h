@@ -202,7 +202,7 @@ private:
 
 /// Options for MLIR to waveasm translation
 struct TranslationOptions {
-  /// Target architecture (gfx942, gfx950, gfx1250)
+  /// Target architecture (gfx90a, gfx942, gfx950, gfx1250)
   std::string targetId = "gfx942";
 
   /// Workgroup size (x, y, z). If any dimension is 0, use defaults.
@@ -614,7 +614,7 @@ public:
     // Base: 2 SGPRs for kernarg_segment_ptr
     int64_t count = 2;
     // On gfx950+ with kernarg preloading, add preloaded args
-    if (llvm::isa<GFX950TargetAttr>(target)) {
+    if (target.hasFeature(TargetFeature::HasKernargPreload)) {
       // Each kernel arg uses 2 SGPRs, capped at 14 (hardware max 16 total).
       count += std::min(size_t(14), getNumKernelArgs() * 2);
     }

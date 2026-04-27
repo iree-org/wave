@@ -8,8 +8,8 @@
 // Hazard Mitigation Pass - Insert s_nop instructions for hardware hazards
 //
 // This pass handles hardware-specific hazards that require NOP insertion:
-// - VALU → v_readfirstlane hazard (gfx940+)
-// - Trans → non-Trans VALU forwarding hazard (gfx940+)
+// - VALU → v_readfirstlane hazard (gfx90a/gfx940+)
+// - Trans → non-Trans VALU forwarding hazard (gfx90a/gfx940+)
 //===----------------------------------------------------------------------===//
 
 #include "waveasm/Dialect/WaveASMAttrs.h"
@@ -136,8 +136,9 @@ bool hasVGPRConflict(Operation *producer, Operation *consumer) {
 
 /// Check if target requires VALU → readfirstlane hazard mitigation
 static bool needsVALUReadFirstLaneHazard(TargetAttrInterface target) {
-  // gfx940+ (CDNA3/4) architectures need this hazard mitigation
-  return isa<GFX942TargetAttr, GFX950TargetAttr, GFX1250TargetAttr>(target);
+  // gfx90a and gfx940+ architectures need this hazard mitigation.
+  return isa<GFX90ATargetAttr, GFX942TargetAttr, GFX950TargetAttr,
+             GFX1250TargetAttr>(target);
 }
 
 //===----------------------------------------------------------------------===//
@@ -154,8 +155,9 @@ struct HazardMitigationPass
     // Parse target arch from option.
     std::optional<TargetKind> parsed = symbolizeTargetKind(targetArch);
     if (!parsed) {
-      module->emitError() << "Invalid target architecture: '" << targetArch
-                          << "'. Supported targets: gfx942, gfx950, gfx1250";
+      module->emitError()
+          << "Invalid target architecture: '" << targetArch
+          << "'. Supported targets: gfx90a, gfx942, gfx950, gfx1250";
       return signalPassFailure();
     }
     targetKindEnum = *parsed;

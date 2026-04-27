@@ -19,17 +19,18 @@ namespace waveasm {
 
 enum class TargetFeature : uint32_t {
   None = 0,
-  HasMFMA = 1 << 0,          // Matrix fused multiply-add
-  HasFP8 = 1 << 1,           // FP8 support
-  HasPackedFP32 = 1 << 2,    // Packed FP32 operations
-  HasWave32 = 1 << 3,        // Wave32 mode support
-  HasWave64 = 1 << 4,        // Wave64 mode support
-  HasXF32 = 1 << 5,          // Extended FP32 (TF32)
-  HasScaledMFMA = 1 << 6,    // Scaled MFMA instructions
-  HasAtomicFAdd = 1 << 7,    // Atomic float add
-  HasGlobalLoadLDS = 1 << 8, // Global load to LDS
-  HasFlatScratch = 1 << 9,   // Flat scratch support
-  HasAGPRs = 1 << 10,        // Accumulator GPRs
+  HasMFMA = 1 << 0,            // Matrix fused multiply-add
+  HasFP8 = 1 << 1,             // FP8 support
+  HasPackedFP32 = 1 << 2,      // Packed FP32 operations
+  HasWave32 = 1 << 3,          // Wave32 mode support
+  HasWave64 = 1 << 4,          // Wave64 mode support
+  HasXF32 = 1 << 5,            // Extended FP32 (TF32)
+  HasScaledMFMA = 1 << 6,      // Scaled MFMA instructions
+  HasAtomicFAdd = 1 << 7,      // Atomic float add
+  HasGlobalLoadLDS = 1 << 8,   // Global load to LDS
+  HasFlatScratch = 1 << 9,     // Flat scratch support
+  HasAGPRs = 1 << 10,          // Accumulator GPRs
+  HasKernargPreload = 1 << 11, // Kernel argument preload SGPRs
 };
 
 inline TargetFeature operator|(TargetFeature a, TargetFeature b) {

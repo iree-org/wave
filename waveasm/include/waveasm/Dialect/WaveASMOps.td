@@ -291,6 +291,7 @@ def WaveASM_ProgramOp : WAVEASMOp<"program", [
   );
 
   let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
 
   let assemblyFormat = [{
     $sym_name

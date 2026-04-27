@@ -64,7 +64,7 @@ static llvm::cl::opt<std::string>
 
 static llvm::cl::opt<std::string>
     targetId("target", llvm::cl::desc("Target GPU architecture"),
-             llvm::cl::value_desc("gfx942|gfx950|gfx1250"),
+             llvm::cl::value_desc("gfx90a|gfx942|gfx950|gfx1250"),
              llvm::cl::init("gfx942"));
 
 static llvm::cl::opt<bool> disablePassVerifier(

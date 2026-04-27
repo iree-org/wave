@@ -168,6 +168,9 @@ private:
   /// Generate code for a raw op
   std::string generateRaw(RawOp rawOp);
 
+  /// Return the target-specific assembly mnemonic for a WaveASM op mnemonic.
+  std::string getTargetMnemonic(llvm::StringRef mnemonic);
+
   //===--------------------------------------------------------------------===//
   // Helper methods for TypeSwitch-based code generation
   //===--------------------------------------------------------------------===//
