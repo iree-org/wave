@@ -155,8 +155,9 @@ struct HazardMitigationPass
     // Parse target arch from option.
     std::optional<TargetKind> parsed = symbolizeTargetKind(targetArch);
     if (!parsed) {
-      module->emitError() << "Invalid target architecture: '" << targetArch
-                          << "'. Supported targets: gfx90a, gfx942, gfx950, gfx1250";
+      module->emitError()
+          << "Invalid target architecture: '" << targetArch
+          << "'. Supported targets: gfx90a, gfx942, gfx950, gfx1250";
       return signalPassFailure();
     }
     targetKindEnum = *parsed;

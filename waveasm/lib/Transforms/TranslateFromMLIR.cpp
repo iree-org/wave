@@ -247,8 +247,8 @@ void TranslationContext::emitSRDPrologue() {
       auto offsetImm = builder.getType<ImmType>(kernargOffset);
       auto offsetConst =
           ConstantOp::create(builder, loc, offsetImm, kernargOffset);
-      auto loadOp = S_LOAD_DWORDX2::create(
-          builder, loc, TypeRange{loadDstType}, kernargBase, offsetConst);
+      auto loadOp = S_LOAD_DWORDX2::create(builder, loc, TypeRange{loadDstType},
+                                           kernargBase, offsetConst);
       argLoadResults[i] = loadOp->getResult(0);
     }
 
@@ -304,8 +304,7 @@ void TranslationContext::emitSRDPrologue() {
       int64_t preloadBase = 2 + pending.argIndex * 2;
 
       auto srdType = createSRegType(4, 4);
-      auto srdReg =
-          PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
+      auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
       Value preloadSrc;
       auto loadIt = argLoadResults.find(pending.argIndex);
@@ -393,8 +392,7 @@ void TranslationContext::emitSRDPrologue() {
       int64_t sgprIdx = scalarSgprBase + (int64_t)i;
       int64_t kernargOffset = pending.argIndex * 8;
 
-      PrecoloredSRegOp::create(builder, loc, createSRegType(1, 1), sgprIdx,
-                               1);
+      PrecoloredSRegOp::create(builder, loc, createSRegType(1, 1), sgprIdx, 1);
       RawOp::create(builder, loc,
                     "s_load_dword s" + std::to_string(sgprIdx) + ", s[0:1], " +
                         std::to_string(kernargOffset));
@@ -410,8 +408,7 @@ void TranslationContext::emitSRDPrologue() {
       int64_t srdBase = pending.srdBaseIndex;
 
       auto srdType = createSRegType(4, 4);
-      auto srdReg =
-          PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
+      auto srdReg = PrecoloredSRegOp::create(builder, loc, srdType, srdBase, 4);
 
       int64_t clampedSize = std::min(pending.bufferSize, kMaxNumRecords32);
       auto sizeImm = createImmType(clampedSize);

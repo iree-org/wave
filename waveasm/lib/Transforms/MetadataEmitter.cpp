@@ -29,8 +29,8 @@ static bool usesCDNAAccumOffset(TargetAttrInterface target) {
       target);
 }
 
-static bool supportsArchitectedFlatScratchDirectives(
-    TargetAttrInterface target) {
+static bool
+supportsArchitectedFlatScratchDirectives(TargetAttrInterface target) {
   return !llvm::isa<GFX90ATargetAttr>(target);
 }
 

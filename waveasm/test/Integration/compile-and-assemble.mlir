@@ -16,7 +16,7 @@
 // CHECK: s_endpgm
 // CHECK: .amdhsa_kernel simple_add
 
-// CHECK-HSACO: ELF 64-bit LSB shared object, AMD GPU
+// CHECK-HSACO: ELF 64-bit LSB shared object
 
 waveasm.program @simple_add
   target = #waveasm.target<#waveasm.gfx942, 5>

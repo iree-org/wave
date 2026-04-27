@@ -146,7 +146,8 @@ KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
     return lines;
   }
 
-  emitMaterializedLiteral(lines, op, asmMnemonic, literalOperandIdx, literalValue);
+  emitMaterializedLiteral(lines, op, asmMnemonic, literalOperandIdx,
+                          literalValue);
   return lines;
 }
 
