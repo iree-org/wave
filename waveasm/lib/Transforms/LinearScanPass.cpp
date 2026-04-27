@@ -235,32 +235,31 @@ private:
   /// tied to the same init value. Each block arg needs its own physical
   /// register, so we create a new v_mov_b32/s_mov_b32 from zero.
   ///
-  /// PRECONDITION: This should only be called for zero-initialized init args
-  /// (e.g., v_mov_b32 %vreg, 0). Calling it for non-zero init args will
-  /// produce incorrect zero values silently.
-  Value createZeroInitCopy(LoopOp loopOp, Value initArg) {
+  /// For VGPR/AGPR: always zero-initialize. Duplicate VGPR/AGPR init args
+  /// are only produced by CSE merging zero-initialized MFMA accumulators;
+  /// v_mov_b32 can't copy a multi-register source in a single instruction.
+  ///
+  /// For SGPR: copy the actual value. Duplicate SGPR init args can carry
+  /// non-zero values (e.g., soffsets from BufferLoadStrengthReduction).
+  Value createInitArgCopy(LoopOp loopOp, Value initArg) {
     OpBuilder copyBuilder(loopOp);
     auto loc = loopOp.getLoc();
 
-    // Create a zero immediate. We always use 0 because this function is
-    // only called for duplicate init args produced by CSE merging identical
-    // zero-initialized values (e.g., v_mov_b32 vN, 0).
-    auto immType = ImmType::get(loopOp->getContext(), 0);
-    Value zeroImm = ConstantOp::create(copyBuilder, loc, immType, 0);
-
     if (isAGPRType(initArg.getType())) {
-      // AGPR zero-init: V_MOV_B32 with ARegType destination.
-      // The assembly emitter will produce v_accvgpr_write_b32 aN, 0.
       auto aregType = cast<ARegType>(initArg.getType());
+      auto immType = ImmType::get(loopOp->getContext(), 0);
+      Value zeroImm = ConstantOp::create(copyBuilder, loc, immType, 0);
       return V_MOV_B32::create(copyBuilder, loc, aregType, zeroImm);
     }
     if (isVGPRType(initArg.getType())) {
       auto vregType = cast<VRegType>(initArg.getType());
+      auto immType = ImmType::get(loopOp->getContext(), 0);
+      Value zeroImm = ConstantOp::create(copyBuilder, loc, immType, 0);
       return V_MOV_B32::create(copyBuilder, loc, vregType, zeroImm);
     }
     if (isSGPRType(initArg.getType())) {
       auto sregType = cast<SRegType>(initArg.getType());
-      return S_MOV_B32::create(copyBuilder, loc, sregType, zeroImm);
+      return S_MOV_B32::create(copyBuilder, loc, sregType, initArg);
     }
     return nullptr;
   }
@@ -357,9 +356,10 @@ private:
     if (collectFailed)
       return failure();
 
-    // Handle duplicate init args: if CSE merged identical zero-initialized
-    // accumulators, multiple block args may be tied to the same init value.
-    // Each block arg needs its own physical register, so insert copies.
+    // Handle duplicate init args: if CSE or other passes cause multiple block
+    // args to be tied to the same init value, each block arg still needs its
+    // own physical register. Insert a copy so the allocator sees distinct SSA
+    // values and doesn't try to coalesce both block args to the same phys reg.
     // This must run before liveness analysis since it modifies the IR.
     program.walk([&](LoopOp loopOp) {
       Block &bodyBlock = loopOp.getBodyBlock();
@@ -369,7 +369,7 @@ private:
         if (i < loopOp.getInitArgs().size()) {
           Value initArg = loopOp.getInitArgs()[i];
           if (usedInitArgs.contains(initArg)) {
-            Value copy = createZeroInitCopy(loopOp, initArg);
+            Value copy = createInitArgCopy(loopOp, initArg);
             if (copy) {
               loopOp.getInitArgsMutable()[i].set(copy);
             }
@@ -496,6 +496,27 @@ private:
     });
     if (packResult.wasInterrupted())
       return failure();
+
+    // Assign IfOp result physical registers from the then-yield operands.
+    // IfOp result ranges were removed from the allocation worklist (in
+    // liveness Pass 3c), so they have no mapping yet. Like PackOp/InsertOp
+    // results, they alias another value's allocation.
+    program.walk([&](IfOp ifOp) {
+      auto thenYield = dyn_cast<YieldOp>(ifOp.getThenBlock().getTerminator());
+      if (!thenYield)
+        return;
+      for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
+        if (i >= thenYield.getResults().size())
+          break;
+        Value ifResult = ifOp->getResult(i);
+        if (mapping.hasMapping(ifResult))
+          continue;
+        Value yieldVal = thenYield.getResults()[i];
+        int64_t yieldPhys = getEffectivePhysReg(yieldVal, mapping);
+        if (yieldPhys >= 0)
+          mapping.setPhysReg(ifResult, yieldPhys);
+      }
+    });
 
     // Transform the IR: replace virtual register types with physical types
     OpBuilder builder(program.getContext());
@@ -657,6 +678,8 @@ private:
               blockPhys = pvreg.getIndex();
             else if (auto psreg = dyn_cast<PSRegType>(blockArgType))
               blockPhys = psreg.getIndex();
+            else if (auto pareg = dyn_cast<PARegType>(blockArgType))
+              blockPhys = pareg.getIndex();
 
             if (initPhys < 0 || blockPhys < 0 || initPhys == blockPhys)
               initArg.setType(blockArgType);
@@ -667,31 +690,6 @@ private:
       for (unsigned i = 0; i < loopOp->getNumResults(); ++i) {
         if (i < bodyBlock.getNumArguments()) {
           loopOp->getResult(i).setType(bodyBlock.getArgument(i).getType());
-        }
-      }
-    });
-
-    // Also update if op result types.
-    // Prefer the allocation mapping (which respects loop ties) over the
-    // then-yield operand type.  When an if result feeds a loop init arg,
-    // the allocator ties it to the loop block arg and both receive the
-    // same physical register.  The then-yield operand may carry a
-    // *different* physical register (from the inner loop), so copying it
-    // blindly would break the LoopLikeOpInterface verifier which requires
-    // exact type equality between init args and region iter_args.
-    program.walk([&](IfOp ifOp) {
-      auto &thenBlock = ifOp.getThenBlock();
-      auto yieldOp = dyn_cast<YieldOp>(thenBlock.getTerminator());
-      if (!yieldOp)
-        return;
-      for (unsigned i = 0; i < ifOp->getNumResults(); ++i) {
-        Value res = ifOp->getResult(i);
-        int64_t physReg = mapping.getPhysReg(res);
-        if (physReg >= 0) {
-          res.setType(
-              makePhysicalType(ifOp->getContext(), res.getType(), physReg));
-        } else if (i < yieldOp.getResults().size()) {
-          res.setType(yieldOp.getResults()[i].getType());
         }
       }
     });

@@ -36,6 +36,13 @@ def parse_args():
         default=None,
         help="Enable epilogue elimination (true/false)",
     )
+    parser.add_argument(
+        "--splitk",
+        type=int,
+        default=None,
+        metavar="NUM_SPLITS",
+        help="Enable split-K with the given number of splits (e.g. --splitk 2)",
+    )
 
     args = parser.parse_args()
 
@@ -64,6 +71,7 @@ def run_test(
     shape=None,
     block=None,
     eliminate_epilogue=None,
+    splitk=None,
 ):
     """Run a test function multiple times."""
     if test_name not in module_globals:
@@ -78,6 +86,8 @@ def run_test(
         kwargs["block"] = block
     if eliminate_epilogue is not None:
         kwargs["eliminate_epilogue"] = eliminate_epilogue
+    if splitk is not None:
+        kwargs["splitk"] = splitk
 
     for i in range(repeat):
         try:

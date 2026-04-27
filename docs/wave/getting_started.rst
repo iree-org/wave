@@ -36,7 +36,7 @@ For Users
 
 2. **Install Wave**
 
-   You can then install Wave and its dependencies using pip:
+   You can then install Wave and its dependencies using pip or `uv pip`:
 
    .. code-block:: bash
 
@@ -61,16 +61,17 @@ For Developers
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
    Next, install the python dependencies. It is recommended to use a virtual environment.
+   We recommend using `uv <https://docs.astral.sh/uv/>`_ for virtualenv creation and package installation.
+   uv uses hard links to a shared cache, so large packages like PyTorch are only downloaded once, and setting up additional virtualenvs (e.g. for git worktrees) is fast.
 
    .. code-block:: bash
 
-      python -m venv .venv
+      uv venv .venv
       source .venv/bin/activate
-      pip install --upgrade pip
-      pip install -r requirements-iree-pinned.txt
+      uv pip install -r requirements-iree-pinned.txt
       ./gen-pytorch-rocm-requirements.py -o requirements-pytorch-rocm-generated.txt
-      pip install -r requirements-pytorch-rocm-generated.txt
-      pip install -e ".[dev]"
+      uv pip install -r requirements-pytorch-rocm-generated.txt
+      uv pip install -e ".[dev]"
 
    *Note:*
 
@@ -78,7 +79,7 @@ For Developers
 
       .. code-block:: bash
 
-        pip install -r pytorch-cpu-requirements.txt
+        uv pip install -r pytorch-cpu-requirements.txt
 
       Currently, you can only run lit tests in this mode.
 

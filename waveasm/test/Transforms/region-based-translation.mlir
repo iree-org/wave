@@ -85,6 +85,37 @@ module {
       gpu.return
     }
 
+    // --- scf.if with VGPR-operand cmpi -> waveasm.if expects SCC/SGPR ---
+    // When arith.cmpi takes a VGPR operand (e.g. from gpu.thread_id) and all
+    // uses feed scf.if, the lowering promotes each VGPR operand through
+    // v_readfirstlane_b32 and emits the s_cmp_* variant for the predicate
+    // directly, producing SCC without an intermediate boolean VGPR.  This is
+    // what post-rebase split-K kernels need when bounds come from
+    // affine.apply on gpu.block_id / gpu.thread_id.
+    // CHECK-LABEL: waveasm.program @scf_if_vgpr_cond_to_wave_if
+    gpu.func @scf_if_vgpr_cond_to_wave_if() kernel {
+      %arg0 = arith.constant 5 : i32
+      %arg1 = arith.constant 3 : i32
+      %c10 = arith.constant 10 : index
+      %tid_x = gpu.thread_id x upper_bound 64
+      %cond = arith.cmpi slt, %tid_x, %c10 : index
+
+      // Direct VGPR-operand promotion: readfirstlane the VGPR, then s_cmp_*.
+      // CHECK:      %[[COND_SGPR:.*]] = waveasm.v_readfirstlane_b32 %{{.*}} : !waveasm.vreg -> !waveasm.sreg
+      // CHECK:      %[[COND_SCC:.*]] = waveasm.s_cmp_lt_i32 %[[COND_SGPR]], %{{.*}} : !waveasm.sreg, !waveasm.imm<10> -> !waveasm.scc
+      // CHECK:      %{{.*}} = waveasm.if %[[COND_SCC]] : !waveasm.scc -> !waveasm.vreg {
+      %result = scf.if %cond -> i32 {
+        %sum = arith.addi %arg0, %arg1 : i32
+        scf.yield %sum : i32
+      } else {
+        %diff = arith.subi %arg0, %arg1 : i32
+        scf.yield %diff : i32
+      }
+
+      // CHECK: waveasm.s_endpgm
+      gpu.return
+    }
+
     // --- Nested scf.for -> nested waveasm.loop ---
     // CHECK-LABEL: waveasm.program @nested_scf_loops
     gpu.func @nested_scf_loops() kernel {

@@ -1,4 +1,4 @@
-// RUN: water-opt %s --water-test-wave-infer-index-exprs --split-input-file --verify-diagnostics | FileCheck %s
+// RUN: water-opt %s --water-test-wave-infer-index-exprs --split-input-file --verify-diagnostics --mlir-print-local-scope | FileCheck %s
 
 //
 // This file contains tests for index expression dataflow analyses that require
@@ -126,7 +126,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     }], [1, {
@@ -153,7 +153,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     }], [1, {
@@ -180,7 +180,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     }],
@@ -207,7 +207,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     }], [1, {
@@ -338,7 +338,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 2)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 2)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 2)>
     }], [1, {
@@ -364,7 +364,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, T0, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, T0, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     }], [1, {
@@ -473,7 +473,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0, 1, 1)>
     }], [1, {
@@ -500,7 +500,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0 + 2, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0 + 2, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<WG0>] -> (WG0 + 2, 1, 1)>
     }], [1, {
@@ -527,7 +527,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (WG0 + T0, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>
     }], [1, {
@@ -557,7 +557,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
       // CHECK: wave.add
       // CHECK-SAME: index
-      // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.iter<"K">] -> (WG0 + _Iter_K, 1, 1)>
+      // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.iter<"K">] -> (WG0 + _Iter_K, 1, 1)>
       %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [[1, {
         M = #wave.index_mapping<[#wave.index_symbol<WG0>] -> (WG0, 1, 1)>
       }], [1, {
@@ -589,7 +589,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ^bb0(%a_arg: !wave.tensor<[@M, @K] of f32>):
       // CHECK: wave.add
       // CHECK-SAME: index
-      // CHECK-SAME: M : <[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)
+      // CHECK-SAME: @M = #wave.index_mapping<[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)
       %partial_result = wave.add %a_arg, %b {wave_test.override_operand_index = [[1, {
         M = #wave.index_mapping<[#wave.iter<"K">] -> (_Iter_K + 42, 1, 1)>
       }], [1, {
@@ -631,7 +631,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
       ^bb1(%a_arg: !wave.tensor<[@M, @K] of f32>):
         // CHECK: wave.add
         // CHECK-SAME: index
-        // CHECK-SAME: M : <[#wave.iter<"K">, #wave.iter<"M">] -> (_Iter_K + _Iter_M, 1, 1)>
+        // CHECK-SAME: @M = #wave.index_mapping<[#wave.iter<"K">, #wave.iter<"M">] -> (_Iter_K + _Iter_M, 1, 1)>
         %partial_result = wave.add %a_arg, %b_arg {wave_test.override_operand_index = [[1, {
           M = #wave.index_mapping<[#wave.iter<"M">] -> (_Iter_M, 1, 1)>
         }], [1, {
@@ -697,8 +697,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Note that indexing over K is still present, but it uses the default (0, 1, 1) value
     // and none of the index expressions use _Iter_K
     // CHECK: wave.read
-    // CHECK-DAG: M : <[] -> (42, 1, 1)>
-    // CHECK-DAG: K : <[] -> (0, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[] -> (42, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[] -> (0, 1, 1)>
     // CHECK: wave.iterate
     %b_reg = wave.read %b : (!wave.tensor<[@M, @K] of f32>) -> !wave.tensor<[@M, @K] of f32>
     %result = wave.iterate @K iter_args(%a) {
@@ -734,7 +734,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.hyperparameters = #wave.hyperparameters<@M = 1024>
   } {
     // CHECK: index
-    // CHECK: M : <[] -> (42, 1, <NULL>)>
+    // CHECK: @M = #wave.index_mapping<[] -> (42, 1, <NULL>)>
     wave.write %a, %b {wave_test.override_operand_index = [
       unit, [1, {
       M = #wave.index_mapping<[#wave.iter<"K">] -> (<NULL>, 1, <NULL>)>
@@ -767,7 +767,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
     // Higher priority lattice on the other operand. Selected without causing a conflict.
     // CHECK: wave.add
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
     %sum = wave.add %a_reg, %b {wave_test.override_operand_index = [
       unit,
       [3, {
@@ -820,13 +820,13 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // CHECK: wave.read
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
     %a_reg = wave.read %a : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
 
     // The override has low priority, it only matters at initialization and is
     // then itself overridden by the higher-priority lattice in backpropagation.
     // CHECK: wave.add
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
     %sum1 = wave.add %a_reg, %b {wave_test.override_operand_index = [
       unit,
       [0, {
@@ -835,11 +835,11 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]} : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
 
     // CHECK: wave.add
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
     %sum2 = wave.add %sum1, %a_reg : (!wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
 
     // CHECK: wave.write
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
     wave.write %sum2, %output {wave_test.override_operand_index = [
       unit,
       [3, {
@@ -872,7 +872,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.write
     // CHECK: index
-    // CHECK: M : <[] -> (1, <NULL>, <NULL>)>
+    // CHECK: @M = #wave.index_mapping<[] -> (1, <NULL>, <NULL>)>
     wave.write %a, %b {wave_test.override_operand_index = [
       unit, [1, {
       M = #wave.index_mapping<[#wave.iter<"K">] -> (1, <NULL>, <NULL>)>
@@ -880,7 +880,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     } : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
     // CHECK: wave.read
     // CHECK: index
-    // CHECK: M : <[] -> (42, <NULL>, <NULL>)>
+    // CHECK: @M = #wave.index_mapping<[] -> (42, <NULL>, <NULL>)>
     %c_reg = wave.read %c {wave_test.override_result_index = [[1, {
       M = #wave.index_mapping<[#wave.iter<"K">] -> (42, <NULL>, <NULL>)>
     }]]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
@@ -915,7 +915,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
     // Same value expression but at higher priority.
     // CHECK: wave.add
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
     %sum = wave.add %a_reg, %b {wave_test.override_operand_index = [
       unit,
       [3, {
@@ -926,7 +926,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Write's own initialization has priority 1 (kWritePriority), but the sum's
     // lattice has priority 3, so it dominates and the write retains T0 * 10.
     // CHECK: wave.write
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>
     wave.write %a_reg, %output {wave_test.override_operand_index = [
       unit, [1, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
@@ -954,7 +954,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // index expression for write during initialization and set non-null step and stride.
     // CHECK: wave.read
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 16, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 16, 1, 1)>
     %a_reg = wave.read %a {wave_test.override_result_index = [[1, {
       M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 16, <NULL>, <NULL>)>
     }]]} : (!wave.tensor<[@M] of f32>) -> !wave.tensor<[@M] of f32>
@@ -962,7 +962,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Add a write operation for %a_reg to the %output function argument
     // CHECK: wave.write
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 16, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 16, 1, 1)>
     wave.write %a_reg, %output : !wave.tensor<[@M] of f32>, !wave.tensor<[@M] of f32>
 
     return %a_reg : !wave.tensor<[@M] of f32>
@@ -1142,7 +1142,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     // CHECK-SAME: vector_shape [#wave.symbol_mapping<@M = 4 : i64>]
     // The vectorShape should be preserved and match.
     %result = wave.add %a, %b {wave_test.override_operand_index = [
@@ -1172,7 +1172,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   } {
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-SAME: M : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     // CHECK-SAME: vector_shape [#wave.symbol_mapping<@M = 8 : i64>]
     // The vectorShape from operand 0 should be preserved.
     %result = wave.add %a, %b {wave_test.override_operand_index = [
@@ -1343,7 +1343,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Forward propagation should keep only N from input, and propagate init fully.
     // CHECK: wave.max_element
     // CHECK-SAME: index
-    // CHECK-SAME: N : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-SAME: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
     %result = wave.max_element %input init(%init) <warp> {wave_test.override_operand_index = [
       {N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
        M = #wave.index_mapping<[#wave.index_symbol<T1>] -> (T1 * 16, 1, 1)>},
@@ -1372,7 +1372,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // but for init, keep only symbols in init shape.
     // CHECK: wave.max_element
     // CHECK-SAME: index
-    // CHECK-SAME: N : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-SAME: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
     %result = wave.max_element %input init(%init) <warp> {wave_test.override_result_index = [{
       N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
     }]} : (!wave.tensor<[@N, @M] of f32>, !wave.tensor<[@N] of f32>) -> !wave.tensor<[@N] of f32, <register>>
@@ -1426,8 +1426,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Result should pick M from operand 0 and N from operand 1.
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [
       [{M = 3 : i32, N = 1 : i32}, {
          M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
@@ -1464,8 +1464,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // N should be overridden by backward propagation from write.
     // CHECK: wave.read
     // CHECK-SAME: index
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     %a_reg = wave.read %a {wave_test.override_result_index = [
       [{M = 3 : i32, N = 0 : i32}, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>,
@@ -1475,8 +1475,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     %sum = wave.add %a_reg, %b : (!wave.tensor<[@M, @N] of f32>, !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
 
     // Write: M at pri=1 (write default), N at pri=3.
@@ -1484,8 +1484,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // M (pri=1) does NOT override read's M (pri=3).
     // CHECK: wave.write
     // CHECK-SAME: index
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 32, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     wave.write %sum, %output {wave_test.override_operand_index = [
       unit,
       [{M = 1 : i32, N = 3 : i32}, {
@@ -1522,14 +1522,14 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // After bitcast i8->f4 (8-bit to 4-bit), the K2 step of 16 should become
     // K step of 32 (doubled). M passes through unchanged.
     // CHECK: wave.bitcast
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 * 2, 32, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 32, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %bitcasted = wave.bitcast %data
       : !wave.tensor<[@M, @K2] of i8, <register>> to !wave.tensor<[@M, @K] of f4E2M1FN, <register>>
 
     // CHECK: wave.write
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 * 2, 32, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 32, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     wave.write %bitcasted, %dst
       : !wave.tensor<[@M, @K] of f4E2M1FN, <register>>, !wave.tensor<[@M, @K] of f4E2M1FN, <global>>
 
@@ -1583,8 +1583,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.hyperparameters = #wave.hyperparameters<@M = 16, @K = 128, @K2 = #wave.expr_list<[#wave.symbol<"K">] -> (K ceildiv 2)>>
   } {
     // CHECK: wave.read
-    // CHECK-DAG: K2 : <[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K2 = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %data = wave.read %src
       : (!wave.tensor<[@M, @K2] of i8, <global>>) -> !wave.tensor<[@M, @K2] of i8, <register>>
 
@@ -1623,8 +1623,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // Higher priority wins for both keys, no structural merge conflict.
     // CHECK: wave.add
     // CHECK-SAME: index
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 30, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 40, 1, 1)>
     %result = wave.add %a, %b {wave_test.override_operand_index = [[1, {
        M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 10, 1, 1)>,
        N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 20, 1, 1)>
@@ -1659,8 +1659,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // After bitcast f4->i8 (4-bit to 8-bit), the K step of 32 should become
     // K2 step of 16 (halved). M passes through unchanged.
     // CHECK: wave.bitcast
-    // CHECK-DAG: K2 : <[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K2 = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %bitcasted = wave.bitcast %data
       : !wave.tensor<[@M, @K] of f4E2M1FN, <register>> to !wave.tensor<[@M, @K2] of i8, <register>>
 
@@ -1692,8 +1692,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
     // Same bitwidth: step is preserved, symbol name stays K.
     // CHECK: wave.bitcast
-    // CHECK-DAG: K : <[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 16, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %bitcasted = wave.bitcast %data
       : !wave.tensor<[@M, @K] of i8, <register>> to !wave.tensor<[@M, @K] of f8E8M0FNU, <register>>
 
@@ -1723,18 +1723,15 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // CHECK: wave.mma
-    // CHECK: }, {
-    // CHECK: }, {
-    // CHECK: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
       -> !wave.tensor<[@M, @N] of f32>
 
     // CHECK: wave.add
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
     %add = wave.add %mma, %d {wave_test.override_result_index = [
       [100, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,
@@ -1764,18 +1761,15 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // CHECK: wave.mma
-    // CHECK: }, {
-    // CHECK: }, {
-    // CHECK: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
       -> !wave.tensor<[@M, @N] of f32>
 
     // CHECK: wave.permute
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
     %permuted = wave.permute %mma {wave_test.override_result_index = [
       [100, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,
@@ -1806,11 +1800,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // CHECK: wave.mma
-    // CHECK: }, {
-    // CHECK: }, {
-    // CHECK: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma = wave.mma %a, %b, %c {kind = #wave.mma_kind<f32_16x16x16_f16>}
       : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
       -> !wave.tensor<[@M, @N] of f32>
@@ -1819,8 +1810,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     // expressions. Sideways propagation within the write should not modify the
     // MMA result (the value-to-store).
     // CHECK: wave.write
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     wave.write %mma, %output {wave_test.override_operand_index = [
       unit,
       [100, {
@@ -1857,11 +1848,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     %result = wave.iterate @K iter_args(%c) {
     ^bb0(%acc: !wave.tensor<[@M, @N] of f32>):
       // CHECK: wave.mma
-      // CHECK: }, {
-      // CHECK: }, {
-      // CHECK: }, {
-      // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-      // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+      // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+      // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
       %mma = wave.mma %a, %b, %acc {kind = #wave.mma_kind<f32_16x16x16_f16>}
         : (!wave.tensor<[@M, @K] of f16>, !wave.tensor<[@N, @K] of f16>, !wave.tensor<[@M, @N] of f32>)
         -> !wave.tensor<[@M, @N] of f32>
@@ -1871,8 +1859,8 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
 
     // High-priority override on the iterate result's downstream use.
     // CHECK: wave.add
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
     %add = wave.add %result, %d {wave_test.override_result_index = [
       [100, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,
@@ -2078,7 +2066,7 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     wave.hyperparameters = #wave.hyperparameters<@M = 16, @N = 16, @K = 128, @K32 = 4>
   } {
     // CHECK: wave.scaled_mma
-    // CHECK-SAME: M : <[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (T0 mod 16
+    // CHECK-SAME: @M = #wave.index_mapping<[#wave.index_symbol<WG0>, #wave.index_symbol<T0>] -> (T0 mod 16
     %r = wave.scaled_mma %lhs, %lhs_scale, %rhs, %rhs_scale, %acc
          {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
          : (!wave.tensor<[@M, @K] of f4E2M1FN>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
@@ -2109,17 +2097,16 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
     ]
   } {
     // CHECK: wave.scaled_mma
-    // CHECK-COUNT-5: }, {
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (((T0 mod 64) floordiv 16) * 4, 4, 16)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 mod 16, 1, 1)>
     %mma = wave.scaled_mma %a, %a_scale, %b, %b_scale, %c {kind = #wave.mma_kind<f32_16x16x128_f8f6f4>}
       : (!wave.tensor<[@M, @K] of f8E5M2>, !wave.tensor<[@M, @K32] of f8E8M0FNU>,
          !wave.tensor<[@N, @K] of f8E5M2>, !wave.tensor<[@N, @K32] of f8E8M0FNU>,
          !wave.tensor<[@M, @N] of f32>) -> !wave.tensor<[@M, @N] of f32>
 
     // CHECK: wave.add
-    // CHECK-DAG: M : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
-    // CHECK-DAG: N : <[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: @M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
+    // CHECK-DAG: @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>
     %add = wave.add %mma, %d {wave_test.override_result_index = [
       [100, {
         M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 99, 1, 1)>,

@@ -1,4 +1,4 @@
-// RUN: water-opt %s | FileCheck %s
+// RUN: water-opt %s --mlir-print-local-scope | FileCheck %s
 
 // CHECK: #wave.symbol<"A">
 func.func private @attr() attributes { test.foo = #wave.symbol<"A"> }

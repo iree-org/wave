@@ -129,14 +129,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   func.func @read_index_key_order_m_k_n(%mem: !wave.tensor<[@M, @K, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@M = 64, @K = 32, @N = 128>} {
     // CHECK: wave.read
-    // CHECK-SAME: M :
-    // CHECK-SAME: K :
-    // CHECK-SAME: N :
-    %0 = wave.read %mem index [{
-        M : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
-        K : <[#wave.index_symbol<T0>] -> (T0 * 2, 1, 1)>,
-        N : <[#wave.index_symbol<T0>] -> (T0 * 3, 8, 1)>
-    }] {elements_per_thread = 8 : i64} : (!wave.tensor<[@M, @K, @N] of f16, <global>>) -> vector<8xf16>
+    // CHECK-SAME: @M =
+    // CHECK-SAME: @K =
+    // CHECK-SAME: @N =
+    %0 = wave.read %mem index [#wave.symbol_mapping<@M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 1)>, @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 1, 1)>, @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 3, 8, 1)>>] {elements_per_thread = 8 : i64} : (!wave.tensor<[@M, @K, @N] of f16, <global>>) -> vector<8xf16>
     return
   }
 }
@@ -149,14 +145,10 @@ normalform.module [#wave.normal_form<full_func_boundary>, #wave.normal_form<full
   func.func @write_index_key_order_m_k_n(%val: vector<8xf16>, %mem: !wave.tensor<[@M, @K, @N] of f16, <global>>)
       attributes {wave.hyperparameters = #wave.hyperparameters<@M = 64, @K = 32, @N = 128>} {
     // CHECK: wave.write
-    // CHECK-SAME: M :
-    // CHECK-SAME: K :
-    // CHECK-SAME: N :
-    wave.write %val, %mem index [{
-        M : <[#wave.index_symbol<T0>] -> (T0, 1, 1)>,
-        K : <[#wave.index_symbol<T0>] -> (T0 * 2, 1, 1)>,
-        N : <[#wave.index_symbol<T0>] -> (T0 * 3, 8, 1)>
-    }] {elements_per_thread = 8 : i64} : vector<8xf16>, !wave.tensor<[@M, @K, @N] of f16, <global>>
+    // CHECK-SAME: @M =
+    // CHECK-SAME: @K =
+    // CHECK-SAME: @N =
+    wave.write %val, %mem index [#wave.symbol_mapping<@M = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0, 1, 1)>, @K = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 2, 1, 1)>, @N = #wave.index_mapping<[#wave.index_symbol<T0>] -> (T0 * 3, 8, 1)>>] {elements_per_thread = 8 : i64} : vector<8xf16>, !wave.tensor<[@M, @K, @N] of f16, <global>>
     return
   }
 }

@@ -27,6 +27,7 @@ from water_mlir.water_mlir.dialects import wave
 # This is fine since it doesn't depend on IREE transitively.
 from wave_lang.support.indexing import (
     MMA_ACC_SYMBOL_NAME,
+    IndexExpr,
     IndexSequence,
     index_symbol,
     IndexSymbol,
@@ -294,10 +295,19 @@ def _convert_index_mapping_attr_to_sympy(
     return IndexSequence(start, step, stride)
 
 
-def _convert_index_mapping_dict_to_sympy(
+def convert_symbol_mapping_attr_to_sympy(
     mapping_attr: wave.WaveSymbolMappingAttr,
+    derived_dims: dict[str, IndexExpr] | None = None,
 ) -> dict[IndexSymbol, IndexSequence]:
-    """Convert a WaveSymbolMappingAttr containing WaveIndexMappingAttr to a dictionary of Wave IndexSequences."""
+    """Convert a single WaveSymbolMappingAttr to a dict of IndexSequences.
+
+    When `derived_dims` is provided, derived dimension keys (e.g. `K32`)
+    are mapped back to their base symbol (e.g. `K`). This reverses the
+    emit-side `_remap_scaled_index_keys` which renames base-symbol keys
+    to match the MLIR type's dimension names. The base symbol is recovered
+    as the sole free symbol of the derived expression, mirroring the
+    constraint enforced by `_derived_dim_clean_name` on the emit side.
+    """
     result = {}
     for i in range(len(mapping_attr)):
         item = mapping_attr[i]
@@ -310,7 +320,17 @@ def _convert_index_mapping_dict_to_sympy(
         assert isinstance(
             value, wave.WaveIndexMappingAttr
         ), f"Unsupported index mapping attribute: {value}"
-        result[index_symbol(key)] = _convert_index_mapping_attr_to_sympy(value)
+        if derived_dims and key in derived_dims:
+            expr = derived_dims[key]
+            free = list(expr.free_symbols)
+            assert len(free) == 1, (
+                f"Derived dim '{key}' = {expr} has {len(free)} free symbols; "
+                f"expected exactly 1 (as enforced by _derived_dim_clean_name)"
+            )
+            sym = free[0]
+        else:
+            sym = index_symbol(key)
+        result[sym] = _convert_index_mapping_attr_to_sympy(value)
     return result
 
 
@@ -338,29 +358,44 @@ def _make_piecewise_sequence(
     )
 
 
-def convert_index_mapping_array_to_sympy(
-    op: ir.Operation, array_attr: ir.ArrayAttr, element: int = 0
+def convert_mma_index_to_sympy(
+    array_attr: ir.ArrayAttr,
+    derived_dims: dict[str, IndexExpr] | None = None,
+    has_scale_operands: bool = False,
 ) -> dict[IndexSymbol, IndexSequence]:
-    assert element == 0 or isinstance(op.opview, wave.IterateOp)
+    """Reconstruct a combined MMA index dict from per-operand index arrays.
 
-    if isinstance(op.opview, wave.IterateOp):
-        assert element < len(array_attr)
-        return _convert_index_mapping_dict_to_sympy(array_attr[element])
-
-    # TODO: for some reason, isinstance(op.opview, MmaOp) is not working. Something is off with dialect loading/registration.
-    if op.name != "wave.mma":
+    MMA ops carry separate index mappings per operand. This function converts
+    each mapping, infers M/N/K/batch roles via set algebra on the dimension
+    keys, and builds a single combined dict. Only M gets a Piecewise
+    (LHS vs ACC have different access patterns); N, K, and batch dims
+    are consistent across operands.
+    """
+    if has_scale_operands:
         assert (
-            len(array_attr) == 1
-        ), f"Expected exactly one index mapping attribute for non-MMA op: {op}"
-        return _convert_index_mapping_dict_to_sympy(array_attr[0])
+            len(array_attr) == 6
+        ), f"Expected 6 index mapping entries for ScaledMMA, got {len(array_attr)}"
+        (
+            lhs_index,
+            lhs_scale_index,
+            rhs_index,
+            rhs_scale_index,
+            acc_index,
+            result_index,
+        ) = tuple(
+            convert_symbol_mapping_attr_to_sympy(mapping, derived_dims)
+            for mapping in array_attr
+        )
 
-    assert (
-        len(array_attr) == 4
-    ), f"Expected exactly four index mapping attributes for MMA op: {op}"
-    lhs_index = _convert_index_mapping_dict_to_sympy(array_attr[0])
-    rhs_index = _convert_index_mapping_dict_to_sympy(array_attr[1])
-    acc_index = _convert_index_mapping_dict_to_sympy(array_attr[2])
-    result_index = _convert_index_mapping_dict_to_sympy(array_attr[3])
+    else:
+        assert (
+            len(array_attr) == 4
+        ), f"Expected 4 index mapping entries for MMA, got {len(array_attr)}"
+        lhs_index = convert_symbol_mapping_attr_to_sympy(array_attr[0], derived_dims)
+        rhs_index = convert_symbol_mapping_attr_to_sympy(array_attr[1], derived_dims)
+        acc_index = convert_symbol_mapping_attr_to_sympy(array_attr[2], derived_dims)
+        result_index = convert_symbol_mapping_attr_to_sympy(array_attr[3], derived_dims)
+
     bmk_symbols = set(lhs_index.keys())
     bnk_symbols = set(rhs_index.keys())
     bnm_symbols = set(acc_index.keys())
@@ -376,7 +411,7 @@ def convert_index_mapping_array_to_sympy(
         assert lhs_index[b_symbol] == rhs_index[b_symbol]
         assert rhs_index[b_symbol] == acc_index[b_symbol]
         assert acc_index[b_symbol] == result_index[b_symbol]
-    return {b_symbol: lhs_index[b_symbol] for b_symbol in b_symbols} | {
+    combined = {b_symbol: lhs_index[b_symbol] for b_symbol in b_symbols} | {
         m_symbol: _make_piecewise_sequence(
             (lhs_index[m_symbol], ~index_symbol(MMA_ACC_SYMBOL_NAME)),
             (acc_index[m_symbol], index_symbol(MMA_ACC_SYMBOL_NAME)),
@@ -384,3 +419,16 @@ def convert_index_mapping_array_to_sympy(
         n_symbol: rhs_index[n_symbol],
         k_symbol: lhs_index[k_symbol],
     }
+    if has_scale_operands:
+        scale_shared = set(lhs_scale_index.keys()) & set(rhs_scale_index.keys())
+        for sym in scale_shared:
+            assert lhs_scale_index[sym] == rhs_scale_index[sym], (
+                f"lhs_scale and rhs_scale disagree on {sym}: "
+                f"{lhs_scale_index[sym]} vs {rhs_scale_index[sym]}"
+            )
+        scale_only = set(lhs_scale_index.keys()) - set(combined.keys())
+        # Appended after tensor M/N/K/batch (see docstring). Sort for stable
+        # insertion order.
+        for sym in sorted(scale_only, key=str):
+            combined[sym] = lhs_scale_index[sym]
+    return combined

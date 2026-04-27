@@ -342,12 +342,27 @@ IfOp RegionBuilder::buildIfFromSCFIf(scf::IfOp ifOp) {
     return nullptr;
   }
 
-  // Convert condition to sreg if it's an immediate
-  // (arith.cmpi maps result to immediate placeholder)
+  // waveasm.if requires an SCC or SGPR condition.  arith.cmpi on scalar
+  // operands already produces SCC; other sources (VGPR from vector cmpi,
+  // immediate placeholders, SGPRs used as booleans) are coerced here.
+  // VGPR path mirrors buildLoopFromSCFFor's VGPR upper-bound handling:
+  // v_readfirstlane_b32 then s_cmp_ne_u32 with 0 to set SCC.
   Value conditionValue = *condition;
-  if (isa<ImmType>(conditionValue.getType())) {
+  auto condType = conditionValue.getType();
+  if (!isSCCType(condType)) {
     auto sregType = ctx.createSRegType();
-    conditionValue = S_MOV_B32::create(builder, loc, sregType, conditionValue);
+    if (isVGPRType(condType)) {
+      conditionValue =
+          V_READFIRSTLANE_B32::create(builder, loc, sregType, conditionValue);
+    } else if (isa<ImmType>(condType)) {
+      conditionValue =
+          S_MOV_B32::create(builder, loc, sregType, conditionValue);
+    }
+    auto sccType = ctx.createSCCType();
+    auto zeroImmType = ctx.createImmType(0);
+    Value zero = ConstantOp::create(builder, loc, zeroImmType, 0);
+    conditionValue =
+        S_CMP_NE_U32::create(builder, loc, sccType, conditionValue, zero);
   }
 
   // Infer result types by peeking at what the then region will yield

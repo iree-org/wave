@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional
 
-from sympy import Integer, Piecewise, ceiling, floor
+from sympy import Add, Integer, Min, Mul, Piecewise, ceiling, floor
 
 from .._support.dtype import DataType
 from .._support.indexing import IndexExpr, IndexSequence, IndexSymbol
@@ -760,6 +760,78 @@ class WorkgroupConstraint(DistributionConstraint):
         return bound
 
 
+def _work_may_exceed_dim(work_bound: IndexExpr, dim_bound: IndexExpr) -> bool:
+    """Conservatively decide whether *work_bound* can exceed *dim_bound*.
+
+    Returns ``False`` when we can prove the tiled work never overshoots the
+    tensor dimension; ``True`` (bounds check needed) otherwise.
+
+    Handles the split-K pattern where ``work_bound`` is
+    ``start + tile * ceiling((Min(dim, f(wg)) - start) / tile)`` -- the
+    ``start`` addend is stripped and the ceiling interior is checked for a
+    ``Min`` that caps the range at ``dim``.
+    """
+    if work_bound == dim_bound:
+        return False
+
+    if isinstance(work_bound, (int, Integer)) and isinstance(dim_bound, (int, Integer)):
+        return int(work_bound) > int(dim_bound)
+
+    # Strip an additive start offset so we match the tile*ceiling core even
+    # when work_bound = start + tile * ceiling(...).
+    core = work_bound
+    if isinstance(work_bound, Add):
+        ceil_muls = [
+            a
+            for a in work_bound.args
+            if isinstance(a, Mul) and any(isinstance(f, ceiling) for f in a.args)
+        ]
+        if len(ceil_muls) == 1:
+            core = ceil_muls[0]
+
+    # When ``dim`` is tile-aligned and the ceiling argument contains
+    # ``Min(dim, ...)`` anywhere in its numerator, the Min caps the range
+    # at ``dim``, so ``tile * ceiling(... / tile) <= dim``.
+    if isinstance(dim_bound, (int, Integer)):
+        dim_int = int(dim_bound)
+        tile, ceil_expr = _extract_tile_and_ceiling(core)
+        if tile is not None and dim_int % tile == 0 and ceil_expr is not None:
+            numer, denom = ceil_expr.args[0].as_numer_denom()
+            if denom == tile and _expr_contains_min_with_bound(numer, dim_int):
+                return False
+
+    # Cannot prove safety -- assume bounds check is needed.
+    return True
+
+
+def _expr_contains_min_with_bound(expr: IndexExpr, bound) -> bool:
+    """Return True when *expr* (recursively) contains ``Min(bound, ...)``."""
+    if isinstance(expr, Min):
+        if any(a == bound for a in expr.args):
+            return True
+    for arg in getattr(expr, "args", ()):
+        if _expr_contains_min_with_bound(arg, bound):
+            return True
+    return False
+
+
+def _extract_tile_and_ceiling(
+    expr: IndexExpr,
+) -> tuple[int | None, IndexExpr | None]:
+    """Extract ``(tile, ceiling_expr)`` from ``tile * ceiling(...)``.
+
+    Returns ``(None, None)`` when the expression does not match.
+    """
+    if not isinstance(expr, Mul) or len(expr.args) != 2:
+        return None, None
+    a, b = expr.args
+    if isinstance(a, (int, Integer)) and isinstance(b, ceiling):
+        return int(a), b
+    if isinstance(b, (int, Integer)) and isinstance(a, ceiling):
+        return int(b), a
+    return None, None
+
+
 @dataclass
 class TilingConstraint(DistributionConstraint):
     """
@@ -819,7 +891,7 @@ class TilingConstraint(DistributionConstraint):
 
     def get_index_bound(self, vector_shape: Optional[int]) -> Optional[IndexExpr]:
         bound = None
-        if subs_idxc(self.work_bound) != subs_idxc(self.dim_bound):
+        if _work_may_exceed_dim(subs_idxc(self.work_bound), subs_idxc(self.dim_bound)):
             bound = self.dim_bound
 
         if (

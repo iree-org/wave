@@ -88,7 +88,7 @@ ninja
 ### pip Build
 
 ```bash
-WAVE_BUILD_WAVEASM=1 WAVE_LLVM_DIR=/path/to/llvm-install pip install -e .
+WAVE_BUILD_WAVEASM=1 WAVE_LLVM_DIR=/path/to/llvm-install uv pip install -e .
 ```
 
 ### Verify Build

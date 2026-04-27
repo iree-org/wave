@@ -9,11 +9,12 @@ from dataclasses import fields as dataclass_fields, is_dataclass
 
 import numpy as np
 from typing import (
+    Any,
     Callable,
+    Iterable,
     Optional,
     Sequence,
     TypeAlias,
-    Any,
 )
 
 import sympy
@@ -31,6 +32,8 @@ from ...lang.wave_types import Memory, Register
 from ..constraints import HardwareConstraint, TilingConstraint, WaveConstraint
 from ...ops.wave_ops import (
     MMA,
+    MMABase,
+    ScaledMMA,
     Allocate,
     Broadcast,
     Conditional,
@@ -410,6 +413,37 @@ def _check_payloads_equivalent(
     return Success() if lhs == rhs else Failure(f"value mismatch: {lhs} vs {rhs}")
 
 
+def _pairs_for_nested_region_result_types(
+    lhs: ResultType,
+    rhs: ResultType,
+) -> Result[Iterable[tuple[ResultType, ResultType]]]:
+    """Build (lhs, rhs) pairs for comparing NestedRegionOp `type` fields.
+
+    Same-length `zip` is the normal case. The arity-1-vs-N branch below should
+    not be needed if `Iterate.type` always matched `NestedRegionOp.infer_type`
+    (one type per carry, list when several). Some passes still collapse multiple
+    GetResult types onto a single `type` on the iterate node. MLIR import does
+    not.
+    """
+    lhs_types = list(lhs) if isinstance(lhs, (list, tuple)) else [lhs]
+    rhs_types = list(rhs) if isinstance(rhs, (list, tuple)) else [rhs]
+    if len(lhs_types) == len(rhs_types):
+        pairs: Iterable[tuple[ResultType, ResultType]] = zip(lhs_types, rhs_types)
+    # Workaround until Iterate `type` is always arity-aligned with GetResults.
+    # TODO: fix those passes so roundtrip compares equal-arity `type` lists and
+    # this broadcast can be removed.
+    elif min(len(lhs_types), len(rhs_types)) == 1:
+        if len(lhs_types) == 1:
+            pairs = ((lhs_types[0], rhs_t) for rhs_t in rhs_types)
+        else:
+            pairs = ((lhs_t, rhs_types[0]) for lhs_t in lhs_types)
+    else:
+        return Failure(
+            f"result type arity mismatch: {len(lhs_types)} vs {len(rhs_types)}"
+        )
+    return Success(pairs)
+
+
 def _check_result_types_equivalent(
     lhs: ResultType,
     rhs: ResultType,
@@ -424,6 +458,15 @@ def _check_result_types_equivalent(
         return Success()
     if rhs is None:
         return Failure("type lost: present in reference but absent in actual")
+
+    if isinstance(lhs, (list, tuple)) or isinstance(rhs, (list, tuple)):
+        zipped_results = _pairs_for_nested_region_result_types(lhs, rhs)
+        if not zipped_results:
+            return zipped_results
+        for i, (a, b) in enumerate(zipped_results.value):
+            if not (check_result := _check_result_types_equivalent(a, b, subs)):
+                return Failure(f"result type[{i}]: {check_result.error}")
+        return Success()
 
     if (lhs_shape := getattr(lhs, "symbolic_shape", None)) != (
         rhs_shape := getattr(rhs, "symbolic_shape", None)
@@ -482,6 +525,46 @@ def _check_index_equivalent(
                 return Failure(f"index list mismatch at {idx}: {check_result.error}")
         return Success()
     raise ValueError(f"Unsupported index types: {type(lhs)} vs {type(rhs)}")
+
+
+def _check_mma_indices_equivalent(
+    lhs_custom: MMABase,
+    rhs_custom: MMABase,
+    subs: Optional[dict[IndexSymbol, int]],
+) -> Result:
+    """Compare MMA/ScaledMMA indices per-operand rather than on the combined dict.
+
+    The combined index dict carries Piecewise expressions whose conditions use
+    MMA_LHS, MMA_ACC, MMA_LHS_SCALE, MMA_RHS_SCALE, MMA_SCALE_FP4, etc.
+    Each per-operand property (lhs_index, rhs_index, ...) substitutes these
+    with concrete 0/1 values, resolving the Piecewise. Comparing per-operand
+    avoids mismatches from Piecewise branches that are dead for a given dtype
+    configuration and therefore lost during MLIR serialization.
+    """
+    # Result index == acc index (asserted in convert_mma_index_to_sympy),
+    # so comparing acc suffices.
+    operand_names = ["lhs", "rhs", "acc"]
+    if isinstance(lhs_custom, ScaledMMA):
+        operand_names = ["lhs", "lhs_scale", "rhs", "rhs_scale", "acc"]
+
+    for name in operand_names:
+        lhs_op_index = getattr(lhs_custom, f"{name}_index", None)
+        rhs_op_index = getattr(rhs_custom, f"{name}_index", None)
+        if lhs_op_index is None:
+            continue
+        if rhs_op_index is None:
+            return Failure(
+                f"{type(lhs_custom).__name__}.{name}_index: present in reference but absent in actual"
+            )
+        if not (
+            check_result := _check_index_mapping_equivalent(
+                lhs_op_index, rhs_op_index, subs
+            )
+        ):
+            return Failure(
+                f"{type(lhs_custom).__name__}.{name}_index: {check_result.error}"
+            )
+    return Success()
 
 
 def _check_nodes_equivalent(
@@ -598,7 +681,17 @@ def _check_nodes_equivalent(
                 return Failure(
                     f"index lost on {type(lhs_custom).__name__}: present in reference but absent in actual",
                 )
-            if not (
+            # MMA/ScaledMMA: compare per-operand indices rather than the
+            # combined dict, which carries Piecewise branches that may be
+            # dead for a given dtype and lost during MLIR serialization.
+            if isinstance(lhs_custom, MMABase):
+                if not (
+                    check_result := _check_mma_indices_equivalent(
+                        lhs_custom, rhs_custom, subs
+                    )
+                ):
+                    return check_result
+            elif not (
                 check_result := _check_index_equivalent(lhs_index, rhs_index, subs)
             ):
                 return check_result

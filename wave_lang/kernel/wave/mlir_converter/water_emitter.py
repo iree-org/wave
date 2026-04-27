@@ -28,7 +28,8 @@ if __name__ == "__main__":
         sys.path.append(_current_dir)
 
 from attr_type_converter import (
-    convert_index_mapping_array_to_sympy,
+    convert_symbol_mapping_attr_to_sympy,
+    convert_mma_index_to_sympy,
     dtype_to_mlir_scalar_type,
     get_operand_symbol_placeholders,
     preprocess_symbols,
@@ -1611,6 +1612,7 @@ def _build_response(
     options: WaveCompileOptions,
     pipeline: str = "",
     test_diagnostics: WaterDiagTestingMode = WaterDiagTestingMode.NO,
+    print_local_scope: bool = False,
 ) -> bytes:
     """Core conversion logic that returns the dill-serialized response bytes.
 
@@ -1671,7 +1673,10 @@ def _build_response(
             )
 
         if options.print_mlir_before_water:
-            print(module.operation.get_asm(), file=sys.stderr)
+            print(
+                module.operation.get_asm(use_local_scope=print_local_scope),
+                file=sys.stderr,
+            )
 
         # If a transform script was provided, parse and apply it to the module.
         # This expects a transform module with a named sequence as first operation.
@@ -1698,7 +1703,9 @@ def _build_response(
                     WaterError(message=f"Failed to apply transform script: {e}")
                 )
 
-        module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
+        module_str = module.operation.get_asm(
+            enable_debug_info=enable_debug_info, use_local_scope=print_local_scope
+        )
         if options.print_mlir_after_water:
             print(module_str, file=sys.stderr)
 
@@ -1738,13 +1745,22 @@ def _build_response(
                     ), f"Index already set for water id {attribute.value}."
                     assert "index" in op.attributes, f"Index not inferred for {op}."
 
-                    inferred_attributes[attribute.value].update(
-                        {
-                            "index": convert_index_mapping_array_to_sympy(
-                                op, op.attributes["index"], element
-                            )
-                        }
-                    )
+                    index_array = op.attributes["index"]
+                    if isinstance(op.opview, MmaOp):
+                        index = convert_mma_index_to_sympy(index_array)
+                    elif isinstance(op.opview, ScaledMmaOp):
+                        index = convert_mma_index_to_sympy(
+                            index_array, has_scale_operands=True
+                        )
+                    else:
+                        assert element < len(index_array), (
+                            f"index element {element} out of range for "
+                            f"{op.name} with {len(index_array)} entries"
+                        )
+                        index = convert_symbol_mapping_attr_to_sympy(
+                            index_array[element]
+                        )
+                    inferred_attributes[attribute.value].update({"index": index})
 
                 if attribute is not None:
                     record_index(attribute, inferred_attributes)
@@ -1762,7 +1778,9 @@ def _build_response(
                 if "index" not in inferred_attribute:
                     raise RuntimeError(f"Index not inferred for water id {water_id}.")
 
-        module_str = module.operation.get_asm(enable_debug_info=enable_debug_info)
+        module_str = module.operation.get_asm(
+            enable_debug_info=enable_debug_info, use_local_scope=print_local_scope
+        )
         return _serialize_response(module_str, diagnostics, inferred_attributes)
 
 
@@ -1828,6 +1846,7 @@ def _server_mode() -> None:
         options = request.get("options", WaveCompileOptions())
         pipeline = request.get("pipeline", "")
         test_diags = request.get("test_diagnostic_emission", WaterDiagTestingMode.NO)
+        print_local_scope = request.get("print_local_scope", False)
 
         if not isinstance(trace, CapturedTrace):
             response_data = _serialize_response(
@@ -1842,7 +1861,7 @@ def _server_mode() -> None:
 
         try:
             response_data = _build_response(
-                trace, constraints, options, pipeline, test_diags
+                trace, constraints, options, pipeline, test_diags, print_local_scope
             )
         except Exception as e:
             response_data = _serialize_response("", [WaterError(message=str(e))], None)
