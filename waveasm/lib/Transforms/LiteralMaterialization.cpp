@@ -68,6 +68,9 @@ KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
     mnemonic = opName.drop_front(8);
   }
 
+  std::string targetMnemonic = getTargetMnemonic(mnemonic);
+  llvm::StringRef asmMnemonic(targetMnemonic);
+
   bool hasNonInlineLiteral = false;
   int64_t literalValue = 0;
   int literalOperandIdx = -1;
@@ -90,7 +93,7 @@ KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
   }
 
   // SALU instructions support 32-bit literals natively
-  if (mnemonic.starts_with("s_")) {
+  if (asmMnemonic.starts_with("s_")) {
     if (auto line = generateOp(op)) {
       lines.push_back(*line);
     }
@@ -106,15 +109,15 @@ KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
   }
 
   // VOP3+ instructions need literal materialization into scratch VGPR.
-  if (needsLiteralMaterialization(mnemonic)) {
-    emitMaterializedLiteral(lines, op, mnemonic, literalOperandIdx,
+  if (needsLiteralMaterialization(asmMnemonic)) {
+    emitMaterializedLiteral(lines, op, asmMnemonic, literalOperandIdx,
                             literalValue);
     return lines;
   }
 
   // v_cndmask_b32 has a dedicated Case handler in generateOp that
   // materializes literals AND drops the implicit VCC condition operand.
-  if (mnemonic == "v_cndmask_b32") {
+  if (asmMnemonic == "v_cndmask_b32") {
     if (auto line = generateOp(op)) {
       lines.push_back(*line);
     }
@@ -139,11 +142,11 @@ KernelGenerator::generateOpWithLiteralHandling(Operation *op) {
     }
     operands.push_back(std::to_string(literalValue));
     operands.push_back(resolveValue(op->getOperand(0)));
-    lines.push_back(formatter.format(mnemonic, operands));
+    lines.push_back(formatter.format(asmMnemonic, operands));
     return lines;
   }
 
-  emitMaterializedLiteral(lines, op, mnemonic, literalOperandIdx, literalValue);
+  emitMaterializedLiteral(lines, op, asmMnemonic, literalOperandIdx, literalValue);
   return lines;
 }
 

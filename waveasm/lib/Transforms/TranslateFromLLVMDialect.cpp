@@ -128,7 +128,8 @@ static ProgramOp createProgramFromLLVMFunc(LLVM::LLVMFuncOp func,
   auto *mlirCtx = builder.getContext();
   auto loc = func.getLoc();
 
-  // Code object version 5: supports kernel argument preloading.
+  // Use code object version 5 consistently; target features decide whether
+  // kernarg preload metadata/prologue is emitted.
   auto targetAttr =
       TargetAttr::get(mlirCtx, getTargetKindAttr(mlirCtx, targetId),
                       /*code_object_version=*/5);

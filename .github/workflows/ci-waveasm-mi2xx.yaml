@@ -1,0 +1,125 @@
+# Copyright 2026 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: "WaveASM MI2xx CI"
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, ready, ready_for_review, converted_to_draft]
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  LLVM_SHA_FILE: llvm-sha.txt
+  LLVM_CACHE_NUMBER: 2
+
+jobs:
+  test_linux_waveasm_mi2xx:
+    name: "MI2xx/gfx90a :: SHARED_LIBS ${{ matrix.shared_libs }} :: Run waveasm tests"
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [3.11]
+        shared_libs: ["ON", "OFF"]
+    runs-on: nodai-amdgpu-mi250-x86-64
+    timeout-minutes: 240
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Setup Cache Vars
+        run: |
+          echo "LLVM_SHA=$(cat $GITHUB_WORKSPACE/water/$LLVM_SHA_FILE)" >> $GITHUB_ENV
+
+      - name: Cache LLVM-MLIR
+        id: cache-llvm-mlir
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: llvm-mlir/_mlir_install/**
+          key: ${{ runner.os }}-mi2xx-build-llvm-${{ env.LLVM_CACHE_NUMBER }}-${{ env.LLVM_SHA }}
+
+      - name: Setup env
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake clang lld dwarfdump
+
+      - name: "Setting up Python"
+        id: setup_python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.version }}
+          pip-install: -r water/requirements-dev.txt
+
+      - name: Checkout LLVM
+        if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ env.LLVM_SHA }}
+          path: llvm-mlir/llvm-project
+
+      - name: Build LLVM-MLIR
+        if: steps.cache-llvm-mlir.outputs.cache-hit != 'true'
+        run: |
+          pushd ${GITHUB_WORKSPACE}/llvm-mlir
+          echo "INFO: Need to rebuild LLVM-MLIR. Previous installation for MLIR not found"
+          np=`nproc`
+          echo "INFO: nproc $np"
+          mkdir _build
+          cd _build
+          export CC=clang
+          export CXX=clang++
+          cmake ../llvm-project/llvm                                           \
+            -GNinja                                                            \
+            -DCMAKE_BUILD_TYPE=Release                                         \
+            -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang"                       \
+            -DLLVM_ENABLE_ASSERTIONS=ON                                        \
+            -DLLVM_INSTALL_UTILS=ON                                            \
+            -DLLVM_TARGETS_TO_BUILD="X86;AMDGPU"                               \
+            -DLLVM_ENABLE_BINDINGS=OFF                                         \
+            -DLLVM_ENABLE_ZSTD=OFF                                             \
+            -DMLIR_INCLUDE_TESTS=OFF                                           \
+            -DLLVM_USE_LINKER=lld                                              \
+            -DLLVM_DISTRIBUTION_COMPONENTS="llvm-headers;llvm-libraries;cmake-exports;FileCheck;count;not;mlir-headers;mlir-libraries;mlir-cmake-exports;mlir-tblgen;mlir-python-sources;lld;clang;clang-resource-headers" \
+            -DMLIR_ENABLE_BINDINGS_PYTHON=ON                                   \
+            -DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
+          echo "INFO: working around a missing dependency on stubgen"
+          ninja MLIRPythonModules.extension._mlir.dso._mlir.type_stubs
+          ninja install-distribution-stripped
+          popd
+
+      - name: Build waveasm
+        run: |
+          export EXTERNAL_LIT=${GITHUB_WORKSPACE}/water/scripts/runlit.py
+          export LLVM_DIR=${GITHUB_WORKSPACE}/llvm-mlir/_mlir_install
+          mkdir -p cmake_build_waveasm
+          cd cmake_build_waveasm
+          export CC=clang
+          export CXX=clang++
+          cmake ${GITHUB_WORKSPACE}/waveasm                                    \
+            -GNinja                                                            \
+            -DCMAKE_BUILD_TYPE=Release                                         \
+            -DLLVM_DIR=${LLVM_DIR}/lib/cmake/llvm                              \
+            -DMLIR_DIR=${LLVM_DIR}/lib/cmake/mlir                              \
+            -DBUILD_SHARED_LIBS=${{ matrix.shared_libs }}                      \
+            -DLLVM_EXTERNAL_LIT=${EXTERNAL_LIT}
+          cmake --build .
+
+      - name: Test waveasm
+        if: ${{ matrix.shared_libs == 'OFF' }}
+        run: |
+          cd cmake_build_waveasm
+          cmake --build . --target check-waveasm

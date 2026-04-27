@@ -80,9 +80,11 @@ def WaveASM_TargetKind
     : I32EnumAttr<"TargetKind", "Supported GPU targets",
                   [I32EnumAttrCase<"GFX942", 0, "gfx942">,
                    I32EnumAttrCase<"GFX950", 1, "gfx950">,
-                   I32EnumAttrCase<"GFX1250", 2, "gfx1250">]> {
+                   I32EnumAttrCase<"GFX1250", 2, "gfx1250">,
+                   I32EnumAttrCase<"GFX90A", 3, "gfx90a">]> {
   let summary = "Supported GPU targets";
   let description = [{
+    - gfx90a: AMD CDNA2 (MI200 series)
     - gfx942: AMD CDNA3 (MI300 series)
     - gfx950: AMD CDNA3+ (future MI series)
     - gfx1250: AMD RDNA4
@@ -195,6 +197,83 @@ class WaveASM_TargetKindAttr<string className, string mnemonic,
   }];
 }
 
+def WaveASM_TargetKindAttr_GFX90A
+    : WaveASM_TargetKindAttr<"GFX90ATarget", "gfx90a"> {
+  let archGeneration = "GFX9";
+  let computeArch = "CDNA2";
+  let maxVGPRs = 256;
+  let maxSGPRs = 106;
+  let maxAGPRs = 256;
+  let defaultWaveSize = 64;
+  let supportedWaveSizes = [64];
+  let maxLDSSize = 65536;
+  let LDSBankCount = 32;
+  let LDSBankWidth = 4;
+  let globalLoadLatency = 100;
+  let LDSLoadLatency = 20;
+  let maxVmcnt = 63;
+  let maxLgkmcnt = 15;
+  let maxExpcnt = 7;
+  let defaultCodeObjectVersion = 5;
+  let supportedCodeObjectVersions = [4, 5];
+  let targetDirective = ".amdgcn_target \\\"amdgcn-amd-amdhsa--gfx90a\\\"";
+  let ABIVersion = "amdhsa";
+
+  let extraClassDeclaration = [{
+    TargetFeature getFeatures() const {
+      return TargetFeature::HasMFMA | TargetFeature::HasWave64 |
+            TargetFeature::HasAtomicFAdd | TargetFeature::HasFlatScratch |
+            TargetFeature::HasAGPRs;
+    }
+
+    int64_t getMFMALatency(::llvm::StringRef instrName) const {
+      // Approximate CDNA2 MFMA latencies.
+      if (instrName.contains("f32_32x32"))
+        return 64;
+      if (instrName.contains("f32_16x16"))
+        return 32;
+      if (instrName.contains("f16_32x32"))
+        return 64;
+      if (instrName.contains("f16_16x16"))
+        return 32;
+      if (instrName.contains("bf16"))
+        return 32;
+      return 16;
+    }
+
+    bool supportsInstruction(::llvm::StringRef instrName) const {
+      // CDNA2 does not support FP8/BF8 MFMA, scaled MFMA/MXFP, or XF32.
+      if (instrName.contains("fp8") || instrName.contains("bf8") ||
+          instrName.contains("f8") || instrName.contains("mxfp") ||
+          instrName.contains("scale") || instrName.contains("xf32"))
+        return false;
+      // The 16x16x32 F16/BF16 variants are gfx950+.
+      if (instrName.contains("16x16x32"))
+        return false;
+      // Global-to-LDS gather instructions are not available on gfx90a.
+      if (instrName.contains("buffer_load") && instrName.contains("_lds"))
+        return false;
+      return true;
+    }
+
+    std::optional<std::string> getTargetInstructionName(::llvm::StringRef genericName) const {
+      if (genericName.starts_with("v_mfma_")) {
+        // gfx90a's assembler spells the element type as part of the final
+        // shape token, e.g. v_mfma_f32_16x16x16f16.
+        for (::llvm::StringRef suffix :
+             {"_f16", "_bf16", "_i8", "_f32", "_f64"}) {
+          if (!genericName.ends_with(suffix))
+            continue;
+          std::string targetName = genericName.str();
+          targetName.erase(targetName.size() - suffix.size(), 1);
+          return targetName;
+        }
+      }
+      return std::nullopt;
+    }
+  }]#commonClassDeclaration;
+}
+
 def WaveASM_TargetKindAttr_GFX942
     : WaveASM_TargetKindAttr<"GFX942Target", "gfx942"> {
   let archGeneration = "GFX9";
@@ -284,7 +363,8 @@ def WaveASM_TargetKindAttr_GFX950
       return TargetFeature::HasMFMA | TargetFeature::HasFP8 |
             TargetFeature::HasWave64 | TargetFeature::HasAtomicFAdd |
             TargetFeature::HasFlatScratch | TargetFeature::HasAGPRs |
-            TargetFeature::HasScaledMFMA | TargetFeature::HasXF32;
+            TargetFeature::HasScaledMFMA | TargetFeature::HasXF32 |
+            TargetFeature::HasKernargPreload;
     }
 
     int64_t getMFMALatency(llvm::StringRef instrName) const {

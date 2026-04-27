@@ -30,6 +30,7 @@ enum class TargetFeature : uint32_t {
   HasGlobalLoadLDS = 1 << 8, // Global load to LDS
   HasFlatScratch = 1 << 9,   // Flat scratch support
   HasAGPRs = 1 << 10,        // Accumulator GPRs
+  HasKernargPreload = 1 << 11, // Kernel argument preload SGPRs
 };
 
 inline TargetFeature operator|(TargetFeature a, TargetFeature b) {
