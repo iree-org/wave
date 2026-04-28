@@ -95,6 +95,74 @@ def e8m0_to_f32(x: Tensor) -> Tensor:
     return x_f32
 
 
+def f32_to_mxfp4(
+    x: Tensor, block_size: int = SCALE_GROUP_SIZE
+) -> tuple[Tensor, Tensor]:
+    """Quantize an f32 tensor to packed MXFP4 (E2M1) with E8M0 block scales.
+
+    Reference implementation matching the dynamic_mxfp4_quant algorithm from
+    ROCm/aiter: per-block power-of-two scale via IEEE 754 bit manipulation,
+    then comparison-based FP4 encoding with round-half-up at midpoints.
+
+    Args:
+        x: float32 tensor of shape ``[M, K]``.  *K* must be divisible by
+           *block_size*.
+        block_size: Number of elements per scale group (default 32 per the
+           OCP MX specification).
+
+    Returns:
+        x_fp4:  ``uint8[M, K // 2]``          -- packed FP4 nibble pairs
+        scales: ``uint8[M, K // block_size]``  -- biased E8M0 block scales
+    """
+    assert x.dtype == torch.float32
+    M, K = x.shape
+    assert K % block_size == 0
+
+    x_blocked = x.reshape(M, K // block_size, block_size)
+
+    # ---- Phase 1: block-scale computation ----
+    amax = x_blocked.abs().amax(dim=-1, keepdim=True)
+
+    # Round amax up to a power-of-two boundary via IEEE 754 bit trick:
+    # add half-ULP at bit 21, then zero the mantissa.
+    amax_bits = amax.contiguous().view(torch.int32)
+    amax_bits = amax_bits + 0x200000
+    mask = torch.tensor(-8388608, dtype=torch.int32, device=x.device)  # 0xFF800000
+    amax_bits = amax_bits & mask
+    amax_pow2 = amax_bits.contiguous().view(torch.float32)
+
+    # Unbiased E8M0 exponent: floor(log2(amax_pow2)) - 2, clamped.
+    # -2 because FP4 E2M1 emax = 2: max representable = 6.0 = 1.5 * 2^2.
+    scale_exp = torch.log2(amax_pow2).floor() - 2
+    scale_exp = scale_exp.clamp(-127, 127)
+
+    quant_scale = torch.exp2(-scale_exp)
+    bs_e8m0 = (scale_exp + 127).to(torch.uint8).squeeze(-1)
+
+    # ---- Phase 2: per-element FP4 encoding ----
+    qx = x_blocked * quant_scale
+    abs_qx = qx.abs()
+
+    # Comparison-based E2M1 magnitude code (round-half-up at midpoints).
+    # Midpoints between adjacent representable values:
+    #   0↔0.5 → 0.25,  0.5↔1 → 0.75,  1↔1.5 → 1.25,  1.5↔2 → 1.75,
+    #   2↔3 → 2.5,     3↔4 → 3.5,     4↔6 → 5.0
+    thresholds = torch.tensor(
+        [0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0],
+        dtype=torch.float32,
+        device=x.device,
+    )
+    mag_code = (abs_qx.unsqueeze(-1) >= thresholds).sum(dim=-1).to(torch.uint8)
+    sign_code = (qx < 0).to(torch.uint8) * 8
+    fp4_code = mag_code + sign_code
+
+    # ---- Phase 3: nibble packing ----
+    fp4_flat = fp4_code.reshape(M, K)
+    x_fp4 = fp4_flat[:, 0::2] + fp4_flat[:, 1::2] * 16
+
+    return x_fp4, bs_e8m0
+
+
 def b_preshuffle(b: Tensor) -> Tensor:
     """Preshuffle packed MXFP4 B weights for direct global reads.
 
