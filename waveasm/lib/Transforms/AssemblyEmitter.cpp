@@ -649,12 +649,22 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
         //   s_cbranch_scc1 L_after_loop_N
         // The initArg-to-blockArg copies above ensure loop results are
         // correct even when the body is skipped entirely.
+        //
+        // Pattern invariant: this guard matches a specific loop form produced
+        // by TranslateFromMLIR for scf.for:
+        //   - The loop condition is S_CMP_LT_U32 (unsigned IV < UB).
+        //   - The induction variable is the first init arg with PSRegType.
+        //   - The upper bound (operand 1 of S_CMP_LT_U32) is SGPR or imm.
+        // If lowering changes the compare opcode, IV position, or UB
+        // representation, this pattern will not match and the assert below
+        // fires.  Extend the pattern match accordingly if that happens.
         std::string afterLabel =
             "L_after_loop_" + std::to_string(loopLabelCounter - 1);
         {
           auto condOp = cast<ConditionOp>(body.getTerminator());
           Value condVal = condOp.getCondition();
           Operation *cmpOp = condVal.getDefiningOp();
+          bool guardEmitted = false;
           if (cmpOp && isa<S_CMP_LT_U32>(cmpOp)) {
             int64_t initIVPhys = -1;
             if (!loopOp.getInitArgs().empty()) {
@@ -668,13 +678,20 @@ std::optional<std::string> KernelGenerator::generateOp(Operation *op) {
               if (auto ps = dyn_cast<PSRegType>(ubTy)) {
                 os << "  s_cmp_ge_u32 s" << initIVPhys << ", s" << ps.getIndex()
                    << "\n";
+                guardEmitted = true;
               } else if (auto imm = dyn_cast<ImmType>(ubTy)) {
                 os << "  s_cmp_ge_u32 s" << initIVPhys << ", " << imm.getValue()
                    << "\n";
+                guardEmitted = true;
               }
-              os << "  s_cbranch_scc1 " << afterLabel << "\n";
+              if (guardEmitted)
+                os << "  s_cbranch_scc1 " << afterLabel << "\n";
             }
           }
+          // If the pattern didn't match, no guard is emitted.  This is
+          // correct for genuine do-while loops (hand-written or non-scf.for
+          // origins) that always execute at least one iteration.  The
+          // afterLabel is still emitted below but never branched to.
         }
 
         os << labelName << ":\n";
