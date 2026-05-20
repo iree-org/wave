@@ -55,3 +55,11 @@ def TestWaveDialectInferIndexExprsPass : Pass<"water-test-wave-infer-index-exprs
     "Attach source vector shape values from the result lattices to operations">,
   ];
 }
+
+def TestUniformityAnalysisPass : Pass<"water-test-uniformity-analysis"> {
+  let summary = "Test pass for uniformity analysis";
+  let description = [{
+    Runs uniformity analysis and attaches wave.uniform attributes to operations
+    whose results are all uniform. Used for testing the uniformity analysis.
+  }];
+}

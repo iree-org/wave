@@ -7,6 +7,7 @@ add_mlir_dialect_library(MLIRWaterTransforms
   EditIR.cpp
   GPUModuleToBinary.cpp
   GPUToGPURuntime.cpp
+  InsertBroadcasts.cpp
   MemrefDecomposition.cpp
   SLPVectorizer.cpp
 
