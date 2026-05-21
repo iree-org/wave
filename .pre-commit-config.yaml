@@ -33,6 +33,24 @@ repos:
         name: Run clang-format on C/C++/etc. files
         exclude_types: ["jupyter", "json"]
 
+# Cyclomatic complexity check.
+-   repo: local
+    hooks:
+    -   id: lizard
+        name: lizard-complexity-check
+        entry: lizard -l python -l cpp --CCN 50 --length 300 -W whitelizard.txt -w
+        language: python
+        additional_dependencies: ["lizard~=1.17.0"]
+        types_or: [python, c, c++]
+        exclude: |
+            (?x)^(
+                water/llvm-install/|
+                .*_ops_gen\.py$|
+                .*_gen\.py$|
+                tests/|
+                examples/
+            )
+
 # Sort file and library lists in CMake files.
 -   repo: https://github.com/Hardcode84/3
     rev: v0.3.0
