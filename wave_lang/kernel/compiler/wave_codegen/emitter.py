@@ -261,7 +261,13 @@ class WaveEmitter:
         return func_op
 
     def emit(self, graph: Optional[fx.Graph] = None) -> Operation:
+        global _magic_number_enabled, _magic_number_cache, _magic_entry_block, _magic_divisor_first_seen
+        _magic_number_enabled = self.options.magic_number_div
+        _magic_number_cache = {}
+        _magic_divisor_first_seen = {}
+
         func = self.emit_func()
+        _magic_entry_block = func.entry_block
         with InsertionPoint.at_block_terminator(func.entry_block), Location.unknown():
             self._emit_graph(
                 graph if graph is not None else self.trace.get_root_graph()
@@ -633,9 +639,14 @@ def add_emitter_subs(
 
 _emulate_ceildiv = bool(int(environ.get("WAVE_EMULATE_CEILDIV", 0)))
 _use_affine_expr = bool(int(environ.get("WAVE_USE_AFFINE_EXPR", 1)))
+_magic_number_enabled = False
+_magic_entry_block = None
 
 _Rational = namedtuple("_Rational", ["numerator", "denominator"])
 _ApplyExpr = namedtuple("_ApplyExpr", ["expr", "args"])
+
+_magic_number_cache: dict = {}
+_magic_divisor_first_seen: dict = {}
 
 
 def _group_same_denom_fractions(expr):
@@ -809,15 +820,162 @@ def gen_sympy_index(dynamics: dict[IndexSymbol, Value], expr: sympy.Expr) -> Val
 
         return op_expr(lhs, rhs, lambda a, b: a * b)
 
+    def _is_dynamic_divisor(val) -> bool:
+        """Check if a value is NOT a compile-time constant."""
+        if isinstance(val, _ApplyExpr):
+            return not all(
+                isinstance(a, OpResult) and get_const_val(a) is not None
+                for a in val.args
+            )
+        if isinstance(val, OpResult):
+            return get_const_val(val) is None
+        return True
+
+    def _divisor_key(val):
+        """Hashable key that identifies a divisor by its structure."""
+        if isinstance(val, _ApplyExpr):
+            arg_keys = []
+            for a in val.args:
+                c = get_const_val(a) if isinstance(a, OpResult) else None
+                arg_keys.append(("const", c) if c is not None else ("val", id(a)))
+            return ("apply", str(val.expr), tuple(arg_keys))
+        if isinstance(val, OpResult):
+            c = get_const_val(val)
+            if c is not None:
+                return ("const", c)
+            return ("val", id(val))
+        return ("other", id(val))
+
+    def _should_use_magic(rhs_expr) -> bool:
+        """Return True only when a dynamic divisor is seen for the second time.
+
+        First encounter: record and decline (no benefit over a single div).
+        Second+ encounter: the precomputation is amortised, so use magic.
+        """
+        key = _divisor_key(rhs_expr)
+        if key in _magic_number_cache:
+            return True
+        if key in _magic_divisor_first_seen:
+            return True
+        _magic_divisor_first_seen[key] = True
+        return False
+
+    def _mulhi_u32(n_i32, m_i32):
+        """Unsigned 32-bit multiply-high: (n * m) >> 32, via 64-bit multiply."""
+        i64 = IntegerType.get_signless(64)
+        c32_i64 = arith_d.constant(i64, 32)
+        n_i64 = arith_d.extui(i64, n_i32)
+        m_i64 = arith_d.extui(i64, m_i32)
+        prod_i64 = arith_d.muli(n_i64, m_i64)
+        hi_i64 = arith_d.shrui(prod_i64, c32_i64)
+        i32 = IntegerType.get_signless(32)
+        return arith_d.trunci(i32, hi_i64)
+
+    def _precompute_magic_number(divisor_index: Value):
+        """
+        Compute magic = ceil(2^32 / d) from a dynamic divisor.
+        Returns (magic_i32, d_i32) both as i32 Values.
+        """
+        i32 = IntegerType.get_signless(32)
+        i64 = IntegerType.get_signless(64)
+        d_i32 = arith_d.index_cast(i32, divisor_index)
+        d_i64 = arith_d.extui(i64, d_i32)
+        c1_i64 = arith_d.constant(i64, 1)
+        c32_i64 = arith_d.constant(i64, 32)
+        pow32 = arith_d.shli(c1_i64, c32_i64)
+        d_minus_1_i64 = arith_d.subi(d_i64, c1_i64)
+        numer_i64 = arith_d.addi(pow32, d_minus_1_i64)
+        magic_i64 = arith_d.divui(numer_i64, d_i64)
+        magic_i32 = arith_d.trunci(i32, magic_i64)
+        return magic_i32, d_i32
+
+    def _get_or_create_magic(divisor_expr):
+        """Get cached (magic_i32, d_i32) or compute and cache them.
+
+        On cache miss the precomputation is hoisted to the function
+        entry block so that the magic constant dominates every use.
+        """
+        key = _divisor_key(divisor_expr)
+        if key in _magic_number_cache:
+            return _magic_number_cache[key]
+        if _magic_entry_block is not None:
+            with InsertionPoint.at_block_begin(_magic_entry_block):
+                divisor_val = (
+                    _get_ir_value(divisor_expr)
+                    if isinstance(divisor_expr, _ApplyExpr)
+                    else divisor_expr
+                )
+                magic_i32, d_i32 = _precompute_magic_number(divisor_val)
+        else:
+            divisor_val = (
+                _get_ir_value(divisor_expr)
+                if isinstance(divisor_expr, _ApplyExpr)
+                else divisor_expr
+            )
+            magic_i32, d_i32 = _precompute_magic_number(divisor_val)
+        _magic_number_cache[key] = (magic_i32, d_i32)
+        return magic_i32, d_i32
+
+    def _magic_div_and_rem(lhs_val, rhs_expr):
+        """Compute (quotient, remainder) of lhs_val // rhs via mulhi.
+
+        Uses unsigned 32-bit arithmetic (extui, divui, shrui, uge).
+        Requires both operands to be non-negative and fit in 32 bits.
+        This holds for GPU index computations: dividends are
+        workgroup/thread indices and divisors are derived from
+        positive kernel dimensions.
+        """
+        i32 = IntegerType.get_signless(32)
+        magic_i32, d_i32 = _get_or_create_magic(rhs_expr)
+        n_i32 = arith_d.index_cast(i32, lhs_val)
+        q_i32 = _mulhi_u32(n_i32, magic_i32)
+        qd_i32 = arith_d.muli(q_i32, d_i32)
+        r_i32 = arith_d.subi(n_i32, qd_i32)
+        # Correction: ceil(2^32/d) can overestimate quotient by 1.
+        # Detect via unsigned remainder >= divisor (wraps on overestimate).
+        too_big = arith_d.cmpi(arith_d.CmpIPredicate.uge, r_i32, d_i32)
+        c1_i32 = arith_d.constant(i32, 1)
+        c0_i32 = arith_d.constant(i32, 0)
+        corr = arith_d.select(too_big, c1_i32, c0_i32)
+        q_final = arith_d.subi(q_i32, corr)
+        d_or_zero = arith_d.select(too_big, d_i32, c0_i32)
+        r_final = arith_d.addi(r_i32, d_or_zero)
+        # Guard: when d == 1 the magic number overflows i32 to 0,
+        # so fall back to the trivial n // 1 = n, n % 1 = 0.
+        d_is_one = arith_d.cmpi(arith_d.CmpIPredicate.eq, d_i32, c1_i32)
+        q_final = arith_d.select(d_is_one, n_i32, q_final)
+        r_final = arith_d.select(d_is_one, c0_i32, r_final)
+        q_index = arith_d.index_cast(IndexType.get(), q_final)
+        r_index = arith_d.index_cast(IndexType.get(), r_final)
+        return q_index, r_index
+
     def rem_expr(lhs, rhs):
         if not use_affine_expr or not check_index_types(lhs, rhs):
             return arith_d.remsi(*_broadcast(lhs, rhs))
+
+        if (
+            _magic_number_enabled
+            and _is_dynamic_divisor(rhs)
+            and _should_use_magic(rhs)
+        ):
+            lhs_val = _get_ir_value(lhs) if isinstance(lhs, _ApplyExpr) else lhs
+            _, r = _magic_div_and_rem(lhs_val, rhs)
+            return r
 
         return op_expr(lhs, rhs, lambda a, b: a % b)
 
     def floordiv_expr(lhs, rhs):
         if not use_affine_expr or not check_index_types(lhs, rhs):
             return arith_d.divsi(*_broadcast(lhs, rhs))
+
+        if (
+            _magic_number_enabled
+            and _is_dynamic_divisor(rhs)
+            and _should_use_magic(rhs)
+        ):
+            lhs_val = _get_ir_value(lhs) if isinstance(lhs, _ApplyExpr) else lhs
+            q, _ = _magic_div_and_rem(lhs_val, rhs)
+            return q
 
         return op_expr(lhs, rhs, lambda a, b: AffineExpr.get_floor_div(a, b))
 
