@@ -36,6 +36,7 @@ from wave_lang.kernel.wave.analysis.annotate_iv_strides import (
     _try_with_div_subs,
 )
 from wave_lang.kernel.wave.assumptions import Assumption, get_divisibility_subs
+from wave_lang.kernel.wave.utils.symbol_utils import simplify
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +426,7 @@ class TestTryWithDivSubs:
         assert result is not None
         base, _, _ = result
         expected_base = flat.subs({iv: sympy.Integer(0)})
-        assert sympy.simplify(base - expected_base) == 0
+        assert simplify(base - expected_base) == 0
 
     def test_method_string_contains_divsubs(self):
         """The returned method string indicates div_subs was used."""
@@ -580,7 +581,7 @@ class TestExtractionCascade:
         base, stride, _ = result
         per_unit = stride // step
         new_offset = base + iv * per_unit
-        assert sympy.simplify(new_offset - flat) == 0
+        assert simplify(new_offset - flat) == 0
 
     def test_new_offset_matches_preshuffle(self):
         """Verify base + iv * per_unit equals original (preshuffle case)."""
@@ -591,7 +592,7 @@ class TestExtractionCascade:
         base, stride, _ = result
         per_unit = stride // step
         new_offset = base + iv * per_unit
-        assert sympy.simplify(new_offset - flat) == 0
+        assert simplify(new_offset - flat) == 0
 
     def test_b_scale_full_pipeline(self):
         """B-scale end-to-end: K=8192, step=2, per_unit = 256."""
@@ -605,4 +606,4 @@ class TestExtractionCascade:
         assert method == "symbolic"
         # Rewrite should match original.
         new_offset = base + iv * per_unit
-        assert sympy.simplify(new_offset - flat) == 0
+        assert simplify(new_offset - flat) == 0

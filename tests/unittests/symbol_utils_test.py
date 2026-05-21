@@ -127,6 +127,13 @@ def test_simplify_floor_of_bounded_fraction(simplify_fn):
     assert simplify_fn(expr) == 0
 
 
+def test_simplify_floor_of_shifted_bounded_fraction():
+    # floor(Mod(4*x + 3,16)/16) should resolve to 0.
+    x = _sym("x")
+    expr = sympy.floor(sympy.Mod(4 * x + 3, 16, evaluate=False) / 16)
+    assert simplify(expr) == 0
+
+
 def test_simplify_mod_elimination():
     # Mod(Mod(x,8), 16) -> Mod(x,8) since range [0,7] < 16.
     x = _sym("x")

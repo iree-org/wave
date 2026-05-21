@@ -109,7 +109,7 @@ def test_divide_shape_into_chunks():
 def test_custom_sympy_simplifications():
     a = sympy.Symbol("a", integer=True, nonnegative=True)
     mod_expr = (sympy.floor(a) * 4 + 3) % 16
-    assert str(simplify(mod_expr)) == "4*(Mod(a, 4)) + 3"
+    assert str(simplify(mod_expr)) == "Mod(4*a, 16) + 3"
 
     floor_expr = sympy.floor(sympy.floor(a) / 3 + sympy.sympify(1) / 6)
     assert str(simplify(floor_expr)) == "floor(a/3)"

@@ -59,7 +59,7 @@ from .utils.general_utils import (
     remove_global_indexing,
     remove_thread_indexing,
 )
-from .utils.symbol_utils import subs_idxc
+from .utils.symbol_utils import ixs_simplify, subs_idxc
 
 logger = get_logger("wave.preshuffle_scale_to_shared")
 
@@ -95,8 +95,8 @@ def _is_scale_preshuffle_mapping(mapping) -> bool:
         floor_num, floor_den = floor_parts
         mod_num, mod_den = mod_expr.args
         return (
-            sympy.simplify(mod_num - floor_num) == 0
-            and sympy.simplify(mod_den - floor_den) == 0
+            ixs_simplify(mod_num - floor_num) == 0
+            and ixs_simplify(mod_den - floor_den) == 0
         )
 
     exprs = list(mapping.input_mapping.values())

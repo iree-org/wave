@@ -58,7 +58,7 @@ from ...ops.wave_ops import (
 )
 from ...wave.utils.general_utils import get_fastest_index, infer_dim, linearize_index
 from ...wave.utils.mapping_utils import transform_index_on_mapping
-from ...wave.utils.symbol_utils import safe_subs, simplify
+from ...wave.utils.symbol_utils import ixs_simplify, safe_subs, simplify
 from ..base import ValidationError
 from ..builder import IRProxyValue
 from ..utils import (
@@ -1651,7 +1651,7 @@ def handle_tensor_load_to_lds(emitter: WaveEmitter, node: fx.Node):
         if local_multicast_mask := subs_idxc(
             safe_subs(multicast_mask, {INPUT_SELECTOR: i})
         ):
-            local_multicast_mask = sympy.simplify(local_multicast_mask)
+            local_multicast_mask = ixs_simplify(local_multicast_mask)
             local_multicast_mask_val = gen_sympy_index(subs, local_multicast_mask)
             workgroup_mask = arith_d.index_cast(i16, local_multicast_mask_val)
             workgroup_mask = vector_d.from_elements(v1i16, [workgroup_mask])

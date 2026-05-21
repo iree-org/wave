@@ -518,6 +518,34 @@ IXS_STATIC void ixs_bounds_add_assumption(ixs_bounds *b, ixs_node *a) {
   }
 }
 
+/* Conservative positive divisor of expr's value when integer-valued:
+ * MUL — absolute coefficient; ADD — gcd of constant and all term
+ * coefficients; everything else — 1.  Deliberately ignores nested
+ * structure; the result is a lower bound on the true step. */
+static int64_t mod_dividend_step(ixs_node *expr) {
+  int64_t p, q, g;
+  uint32_t i;
+  switch (expr->tag) {
+  case IXS_MUL:
+    ixs_node_get_rat(expr->u.mul.coeff, &p, &q);
+    return (q == 1) ? ixs_gcd(p, 0) : 1;
+  case IXS_ADD:
+    ixs_node_get_rat(expr->u.add.coeff, &p, &q);
+    if (q != 1)
+      return 1;
+    g = ixs_gcd(p, 0);
+    for (i = 0; i < expr->u.add.nterms; i++) {
+      ixs_node_get_rat(expr->u.add.terms[i].coeff, &p, &q);
+      if (q != 1)
+        return 1;
+      g = ixs_gcd(g, p);
+    }
+    return (g > 0) ? g : 1;
+  default:
+    return 1;
+  }
+}
+
 static ixs_interval bounds_get_propagated(ixs_bounds *b, ixs_node *expr) {
   uint32_t i;
   if (!expr)
@@ -571,15 +599,21 @@ static ixs_interval bounds_get_propagated(ixs_bounds *b, ixs_node *expr) {
   case IXS_MOD: {
     /* Mod(x, m) in [0, m-1] only when x is integer-valued and m is a
      * positive integer.  For non-integer dividends the range is the
-     * half-open [0, m) which we cannot represent tightly. */
+     * half-open [0, m) which we cannot represent tightly.
+     *
+     * Tighter: if x is always a multiple of d, Mod(x, m) is a multiple
+     * of gcd(d, m), so the upper bound drops to m - gcd(d, m). */
     ixs_node *m = expr->u.binary.rhs;
     if (m->tag == IXS_INT && m->u.ival > 0) {
       ixs_interval pi = ixs_bounds_get(b, expr->u.binary.lhs);
       if (pi.valid && pi.lo_q == 1 && pi.hi_q == 1 && pi.lo_p >= 0 &&
           pi.hi_p < m->u.ival)
         return pi;
-      if (ixs_node_is_integer_valued(expr->u.binary.lhs))
-        return ixs_interval_range(0, 1, m->u.ival - 1, 1);
+      if (ixs_node_is_integer_valued(expr->u.binary.lhs)) {
+        int64_t step = mod_dividend_step(expr->u.binary.lhs);
+        int64_t g = ixs_gcd(step, m->u.ival);
+        return ixs_interval_range(0, 1, m->u.ival - g, 1);
+      }
     }
     return ixs_interval_unknown();
   }
@@ -4428,32 +4462,50 @@ static ixs_node *recognize_mod(ixs_ctx *ctx, ixs_addterm *terms,
                                int64_t const_q) {
   uint32_t i;
   int rc1, rc2;
+  ixs_node *result;
+  ixs_addterm *snap = NULL;
+
+  /* Snapshot terms so we can roll back if a pass hits OOM after
+   * partially rewriting entries (NULLing matched floor/ceil terms
+   * and replacing their partners with Mod nodes). */
+  if (nterms > 0) {
+    snap =
+        ixs_arena_alloc(&ctx->scratch, nterms * sizeof(*snap), sizeof(void *));
+    if (!snap)
+      return NULL;
+    memcpy(snap, terms, nterms * sizeof(*terms));
+  }
 
   rc1 = recognize_mod_const_div(ctx, terms, nterms);
   if (rc1 < 0)
-    return NULL;
+    goto rollback;
   rc2 = recognize_mod_sym_div(ctx, terms, nterms);
   if (rc2 < 0)
-    return NULL;
+    goto rollback;
   if (!rc1 && !rc2)
     return NULL;
 
   IXS_STAT_HIT(ctx);
-  ixs_node *result = make_const(ctx, const_p, const_q);
+  result = make_const(ctx, const_p, const_q);
   if (!result)
-    return NULL;
+    goto rollback;
   for (i = 0; i < nterms; i++) {
     ixs_node *t;
     if (!terms[i].term)
       continue;
     t = simp_mul(ctx, terms[i].coeff, terms[i].term);
     if (!t)
-      return NULL;
+      goto rollback;
     result = simp_add(ctx, result, t);
     if (!result)
-      return NULL;
+      goto rollback;
   }
   return result;
+
+rollback:
+  if (snap)
+    memcpy(terms, snap, nterms * sizeof(*terms));
+  return NULL;
 }
 
 /*

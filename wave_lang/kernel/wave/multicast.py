@@ -27,6 +27,7 @@ from ..ops.wave_ops import TensorLoadToLDS, get_custom
 from .compile_options import WaveCompileOptions
 from .constraints import Constraint, WorkgroupConstraint
 from .utils.general_utils import get_hardware_constraint
+from .utils.symbol_utils import ixs_simplify
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ def compute_multicast_mask(
                 mask_expr += sympy.Piecewise((1 << bit_pos, condition), (0, True))
 
     # Try to simplify
-    return sympy.simplify(mask_expr)
+    return ixs_simplify(mask_expr)
 
 
 @requires_region_format(RegionFormat.DIRECT_OUTER_REF)

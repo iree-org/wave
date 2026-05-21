@@ -1003,6 +1003,9 @@ This enables rules like:
 - `floor(x/64)` where `0 <= x < 64` → `0`
 - `floor(x)` → constant when `floor(lo) == floor(hi)` (same for ceiling)
 - `Mod(x, m)` bounds tightened to dividend's bounds when `0 <= x < m`
+- `Mod(x, m)` upper bound tightened to `m - gcd(d, m)` when `x` is
+  integer-valued and `d` is the gcd of its top-level integer coefficients
+  (e.g. `Mod(4*a, 16)` in `[0, 12]` instead of `[0, 15]`)
 - `Max(1, expr)` where `expr >= 1` → `expr`
 
 **Congruence-gated rewrites** (requires `Mod(sym, M) == R` assumption):
