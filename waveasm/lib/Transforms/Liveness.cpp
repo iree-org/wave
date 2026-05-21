@@ -477,6 +477,57 @@ LivenessInfo computeLiveness(ProgramOp program) {
     }
   }
 
+  // Check for permlane swap ops — used by passes 2c and 3a1.
+  bool hasPermlaneSwaps = false;
+  for (auto *op : ops) {
+    if (isa<V_PERMLANE16_SWAP_B32, V_PERMLANE16_SWAP_B32_PAIR>(op)) {
+      hasPermlaneSwaps = true;
+      break;
+    }
+  }
+
+  // Pass 2c: Extend V_PERMLANE16_SWAP_B32 source live ranges
+  // (defense-in-depth). The handler already preserves the original source via
+  // v_mov_b32 (srcCopy) and remaps future MLIR lookups to the copy, so srcVal
+  // has no uses after the swap op.  This extension is largely redundant — the
+  // copy naturally keeps srcVal alive through the copy point — but is retained
+  // as a safety net in case the remap is ever bypassed.
+  if (hasPermlaneSwaps) {
+    for (auto *op : ops) {
+      if (auto swapOp = dyn_cast<V_PERMLANE16_SWAP_B32>(op)) {
+        Value src = swapOp.getSrc();
+        Value dst = swapOp.getDst();
+        auto srcIt = info.ranges.find(src);
+        auto dstIt = info.ranges.find(dst);
+        if (srcIt != info.ranges.end() && dstIt != info.ranges.end()) {
+          srcIt->second.end = std::max(srcIt->second.end, dstIt->second.end);
+        }
+      }
+      // Extend pair op inputs to cover the lifetime of both outputs.
+      // The assembly emitter reads both inputs at the swap point, so they
+      // must remain live until both outputs have been consumed.
+      if (auto pairOp = dyn_cast<V_PERMLANE16_SWAP_B32_PAIR>(op)) {
+        Value oldDst = pairOp.getOldDst();
+        Value src = pairOp.getSrc();
+        Value newDst = pairOp.getNewDst();
+        Value newSrc = pairOp.getNewSrc();
+        int64_t maxEnd = 0;
+        auto newDstIt = info.ranges.find(newDst);
+        auto newSrcIt = info.ranges.find(newSrc);
+        if (newDstIt != info.ranges.end())
+          maxEnd = std::max(maxEnd, newDstIt->second.end);
+        if (newSrcIt != info.ranges.end())
+          maxEnd = std::max(maxEnd, newSrcIt->second.end);
+        auto oldDstIt = info.ranges.find(oldDst);
+        auto srcIt = info.ranges.find(src);
+        if (oldDstIt != info.ranges.end())
+          oldDstIt->second.end = std::max(oldDstIt->second.end, maxEnd);
+        if (srcIt != info.ranges.end())
+          srcIt->second.end = std::max(srcIt->second.end, maxEnd);
+      }
+    }
+  }
+
   // Note: Pass 3 (CFG-based backward dataflow liveness extension) has been
   // removed. It was needed for the old label-based control flow path where
   // loop back-edges were represented as explicit branch instructions. With
@@ -550,6 +601,30 @@ LivenessInfo computeLiveness(ProgramOp program) {
       }
     }
   });
+
+  // Pass 3a1: Extend pack result ranges to cover downstream users of extracted
+  // sub-values. Only needed when V_PERMLANE16_SWAP_B32 ops exist, since those
+  // allocate dst registers that can conflict with post-hoc pack sub-register
+  // assignments. When no permlane swaps exist, the standard pack handling
+  // (pass 3a) is sufficient.
+  if (hasPermlaneSwaps) {
+    for (auto *op : ops) {
+      auto extractOp = dyn_cast<ExtractOp>(op);
+      if (!extractOp)
+        continue;
+      Value source = extractOp.getVector();
+      auto sourceIt = info.ranges.find(source);
+      if (sourceIt == info.ranges.end())
+        continue;
+      Value extractResult = extractOp.getResult();
+      auto useIt = info.usePoints.find(extractResult);
+      if (useIt != info.usePoints.end()) {
+        for (int64_t use : useIt->second) {
+          sourceIt->second.end = std::max(sourceIt->second.end, use);
+        }
+      }
+    }
+  }
 
   // Pass 3a2: InsertOp pass -- treat insert result as an alias of the source
   // vector, but keep the inserted value in the allocator worklist.

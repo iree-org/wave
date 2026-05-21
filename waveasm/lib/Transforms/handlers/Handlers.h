@@ -38,6 +38,16 @@
 
 namespace waveasm {
 
+/// Move a value from AGPR to VGPR if needed.  Returns the original value
+/// unchanged when it is already a VGPR (or immediate/scalar).
+inline mlir::Value ensureVGPR(mlir::Value val, TranslationContext &ctx,
+                              mlir::OpBuilder &builder, mlir::Location loc) {
+  if (!isAGPRType(val.getType()))
+    return val;
+  auto vregTmp = ctx.createVRegType();
+  return V_ACCVGPR_READ_B32::create(builder, loc, vregTmp, val);
+}
+
 //===----------------------------------------------------------------------===//
 // GPU Dialect Handlers
 //===----------------------------------------------------------------------===//

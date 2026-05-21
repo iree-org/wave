@@ -52,8 +52,24 @@ public:
     return valueMap.contains(mlirValue);
   }
 
+  /// Map a sub-element of a struct-typed MLIR value (for llvm.extractvalue).
+  void setExtraMapping(mlir::Value structVal, int64_t index,
+                       mlir::Value elemVal) {
+    extraMap[{structVal, index}] = elemVal;
+  }
+
+  /// Get a sub-element of a struct-typed MLIR value.
+  std::optional<mlir::Value> getExtraMapping(mlir::Value structVal,
+                                             int64_t index) const {
+    auto it = extraMap.find({structVal, index});
+    if (it != extraMap.end())
+      return it->second;
+    return std::nullopt;
+  }
+
 private:
   llvm::DenseMap<mlir::Value, mlir::Value> valueMap;
+  llvm::DenseMap<std::pair<mlir::Value, int64_t>, mlir::Value> extraMap;
 };
 
 //===----------------------------------------------------------------------===//

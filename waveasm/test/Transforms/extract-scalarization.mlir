@@ -76,11 +76,11 @@ module {
     }
 
     // ---------------------------------------------------------------
-    // Negative: splat dense constant should not be rewritten
+    // Splat dense constant: now scalarized via general fallback
     // ---------------------------------------------------------------
     // CHECK-LABEL: func @no_rewrite_splat
-    // CHECK: arith.constant dense<42> : vector<4xi32>
-    // CHECK: vector.extract
+    // CHECK: arith.constant 42 : i32
+    // CHECK: arith.addi
     func.func @no_rewrite_splat(%x: i32) -> i32 {
       %bcast = vector.broadcast %x : i32 to vector<4xi32>
       %splat = arith.constant dense<42> : vector<4xi32>
