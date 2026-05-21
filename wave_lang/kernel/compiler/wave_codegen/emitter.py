@@ -71,6 +71,7 @@ from ..kernel_codegen import (
     BindingDesc,
     BoundKernelSignature,
     create_argument_locations,
+    get_dynamic_stride_arg_count,
 )
 from ...lang.wave_types import IndexSymbol
 from ...wave.compile_options import WaveCompileOptions
@@ -137,40 +138,70 @@ class WaveEmitter:
             ),
         ]
 
+    def _abi_type(self, binding: BindingDesc) -> IrType:
+        if binding.binding_type == BindingType.KERNEL_BUFFER:
+            # Buffer passed to kernel as 0D memrefs to simplify ABI.
+            element_type = IrType.parse(binding.kernel_buffer_type.dtype.ir_type_asm())
+            return MemRefType.get([], element_type=element_type)
+
+        # Scalars are passed as is.
+        return binding.as_mlir_type()
+
+    def _create_stride_argument_locations(
+        self, bindings: list[BindingDesc], base_locations: list[Location]
+    ) -> list[Location]:
+        if not self.options.dynamic_strides:
+            return []
+
+        stride_locations = []
+        for binding, base_location in zip(bindings, base_locations):
+            if binding.binding_type != BindingType.KERNEL_BUFFER:
+                continue
+            leading_count = max(0, len(binding.kernel_buffer_type.symbolic_shape) - 1)
+            argument_name = binding.name or "argument"
+            for dim_idx in range(leading_count):
+                stride_locations.append(
+                    Location.name(
+                        f"{argument_name}.stride.{dim_idx}",
+                        base_location,
+                    )
+                )
+        return stride_locations
+
+    def _ordered_kernel_buffer_bindings(
+        self, bindings: list[BindingDesc]
+    ) -> list[BindingDesc]:
+        return [
+            binding
+            for binding in bindings
+            if binding.binding_type == BindingType.KERNEL_BUFFER
+        ]
+
+    def _kernel_argument_abi(
+        self, bindings: list[BindingDesc]
+    ) -> tuple[list[IrType], list[Location], int]:
+        arg_types = [self._abi_type(binding) for binding in bindings]
+        arg_locations = create_argument_locations(bindings)
+        kernel_buffer_bindings = self._ordered_kernel_buffer_bindings(bindings)
+        stride_arg_count = get_dynamic_stride_arg_count(
+            self.options.dynamic_strides,
+            kernel_buffer_bindings,
+        )
+        stride_locations = self._create_stride_argument_locations(
+            bindings, arg_locations
+        )
+        assert len(stride_locations) == stride_arg_count
+        if stride_arg_count > 0:
+            arg_types += [IndexType.get()] * stride_arg_count
+            arg_locations += stride_locations
+        return arg_types, arg_locations, stride_arg_count
+
     def emit_func(self) -> Operation:
         bindings = self.root_sig.sig.linear_bindings
-
-        def abi_type(binding: BindingDesc):
-            if binding.binding_type == BindingType.KERNEL_BUFFER:
-                # Buffer passed to kernel as 0D memrefs to simplify ABI.
-                element_type = IrType.parse(
-                    binding.kernel_buffer_type.dtype.ir_type_asm()
-                )
-                return MemRefType.get([], element_type=element_type)
-
-            # Scalars are passed as is.
-            return binding.as_mlir_type()
-
-        arg_types = [abi_type(b) for b in bindings]
-
-        # Dynamic strides only with Wave runtime and LLVM backend (not ASM).
-        # Stride args only for leading dimensions (innermost always has unit stride).
-        stride_arg_count = 0
-        if self.options.dynamic_strides:
-            stride_arg_count = sum(
-                max(0, len(b.kernel_buffer_type.symbolic_shape) - 1)
-                for b in self.root_sig.sig.kernel_buffer_bindings
-            )
-            if stride_arg_count > 0:
-                arg_types += [IndexType.get()] * stride_arg_count
-
+        arg_types, arg_locations, stride_arg_count = self._kernel_argument_abi(bindings)
         ftype = FunctionType.get(arg_types, [])
         func_op = func_d.FuncOp(self.kernel_name, ftype, visibility="private")
-
-        locs = create_argument_locations(bindings)
-        if stride_arg_count > 0:
-            locs += [Location.unknown()] * stride_arg_count
-        entry_block = func_op.add_entry_block(locs)
+        entry_block = func_op.add_entry_block(arg_locations)
 
         # Map dynamic symbols to buffer argument indices and dimensions.
         for bind, arg in zip(bindings, entry_block.arguments):
@@ -285,8 +316,9 @@ class WaveEmitter:
         return func_op, symbol
 
     def emit_host_func(self, kernel_func: Operation) -> Operation:
-        # TODO: kernel bindings order may not be the same as the kernel function
-        # arguments order, so map kernel order to host function arguments order.
+        # Host placeholders follow the original Python signature, while kernel ABI
+        # arguments use linear_bindings order. Track both so launch args can be
+        # materialized in kernel ABI order from host-visible inputs.
         binding_map = {}
         symbol_map = {}
 
@@ -308,22 +340,10 @@ class WaveEmitter:
         bindings = self.root_sig.sig.linear_bindings
 
         ptr = llvm_d.PointerType.get()
-
-        def abi_type(binding: BindingDesc):
-            if binding.binding_type == BindingType.KERNEL_BUFFER:
-                # Buffer passed to kernel as 0D memrefs to simplify ABI.
-                element_type = IrType.parse(
-                    binding.kernel_buffer_type.dtype.ir_type_asm()
-                )
-                return MemRefType.get([], element_type=element_type)
-
-            # Scalars are passed as is.
-            return binding.as_mlir_type()
-
-        arg_types = [abi_type(b) for b in bindings]
-
+        arg_types, kernel_arg_locations, stride_arg_count = self._kernel_argument_abi(
+            bindings
+        )
         ftype = FunctionType.get(arg_types, [])
-        locs = [a.location for a in kernel_func.body.blocks[0].arguments]
 
         gpu_module = gpu_d.module("gpu_module")
         gpu_module.parent.operation.attributes["gpu.container_module"] = UnitAttr.get()
@@ -345,7 +365,7 @@ class WaveEmitter:
 
         new_kernel_entry_block = kernel_func_wrapper.body.blocks.append(
             *arg_types,
-            arg_locs=locs,
+            arg_locs=kernel_arg_locations,
         )
 
         # Inline the kernel function into the gpu module function body and erase the original function
@@ -394,6 +414,11 @@ class WaveEmitter:
 
         get_float64_func, get_float64_func_symbol = self._declare_runtime_func(
             "wave_get_float64", [ptr], [f64], emit_c_interface=True
+        )
+
+        # Get tensor stride function from PyObject*.
+        get_stride_func, get_stride_func_symbol = self._declare_runtime_func(
+            "wave_get_stride", [ptr, i32], [i64], emit_c_interface=True
         )
 
         # Declare host function
@@ -489,6 +514,24 @@ class WaveEmitter:
                     launch_args.append(value)
                 else:
                     raise CodegenError(f"Unsupported binding type: {binding}")
+
+            # Append stride arguments matching the trailing index args
+            # added by emit_func. One stride per leading dimension (rank-1)
+            # for each kernel buffer.
+            if self.options.dynamic_strides:
+                for binding in self._ordered_kernel_buffer_bindings(bindings):
+                    rank = len(binding.kernel_buffer_type.symbolic_shape)
+                    leading_count = max(0, rank - 1)
+                    arg = func_args[binding_map[id(binding)]]
+                    for dim_idx in range(leading_count):
+                        dim = arith_d.constant(i32, dim_idx)
+                        stride = func_d.call(
+                            get_stride_func.type.results,
+                            get_stride_func_symbol,
+                            [arg, dim],
+                        )
+                        stride = arith_d.index_cast(IndexType.get(), stride)
+                        launch_args.append(stride)
 
             gpu_d.launch_func(
                 kernel=[gpu_module.sym_name.value, self.kernel_name],

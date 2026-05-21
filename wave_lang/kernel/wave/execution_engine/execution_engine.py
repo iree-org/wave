@@ -104,6 +104,7 @@ def _load_runtime_helpers():
     _add_symbol(symbol_map, lib, "_mlir_ciface_wave_get_int64")
     _add_symbol(symbol_map, lib, "_mlir_ciface_wave_get_float64")
     _add_symbol(symbol_map, lib, "_mlir_ciface_wave_get_dim")
+    _add_symbol(symbol_map, lib, "_mlir_ciface_wave_get_stride")
 
     return symbol_map
 

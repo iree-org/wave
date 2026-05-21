@@ -121,3 +121,38 @@ extern "C" int64_t _mlir_ciface_wave_get_dim(PyObject *obj_ptr,
 
   return dim_size;
 }
+
+extern "C" int64_t _mlir_ciface_wave_get_stride(PyObject *obj_ptr,
+                                                int32_t dim_idx) {
+  GILState gil_state;
+
+  PyObjectPtr stride_method(PyObject_GetAttrString(obj_ptr, "stride"));
+  if (!stride_method) {
+    PyErr_Clear();
+    throw std::runtime_error(
+        "wave_get_stride: object does not have 'stride' attribute");
+  }
+
+  PyObjectPtr dim_arg(PyLong_FromLong(dim_idx));
+  if (!dim_arg) {
+    PyErr_Clear();
+    throw std::runtime_error(
+        "wave_get_stride: failed to create dimension argument");
+  }
+
+  PyObjectPtr stride_result(
+      PyObject_CallOneArg(stride_method.get(), dim_arg.get()));
+  if (!stride_result) {
+    PyErr_Clear();
+    throw std::runtime_error("wave_get_stride: failed to call stride()");
+  }
+
+  int64_t stride_val = PyLong_AsLongLong(stride_result.get());
+  if (PyErr_Occurred()) {
+    PyErr_Clear();
+    throw std::runtime_error(
+        "wave_get_stride: stride() returned invalid value");
+  }
+
+  return stride_val;
+}
