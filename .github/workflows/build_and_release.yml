@@ -153,6 +153,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write # Create/update a release
+      id-token: write
     steps:
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -162,17 +163,63 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Release python wheels (rolling dev-wheels)
-        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
+      - name: Authenticate to Google Cloud (OSS Exit Gate)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
-          artifacts: dist/*.whl
-          tag: "dev-wheels"
-          name: "dev-wheels"
-          body: "Automatic nightly release of wave-lang python wheels."
-          removeArtifacts: true
-          allowUpdates: true
-          replacesArtifacts: true
-          makeLatest: false
+          project_id: 'oss-exit-gate-prod'
+          workload_identity_provider: 'projects/305452601764/locations/global/workloadIdentityPools/builders/providers/github'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+
+      - name: Clean up stale releases from staging repo
+        run: |
+          packages=$(gcloud artifacts packages list \
+              --project="oss-exit-gate-prod" \
+              --location="us" \
+              --repository="wave--githubreleases" \
+              --format="value(name)" 2>/dev/null)
+          echo "${packages}" | xargs -r -I {} sh -c '
+              package_name=$(basename "{}")
+              echo "Deleting package: $package_name..."
+              gcloud artifacts packages delete "{}" \
+                  --project="oss-exit-gate-prod" \
+                  --location="us" \
+                  --repository="wave--githubreleases" \
+                  --quiet
+          '
+
+      - name: Stage release artifacts to OSS Exit Gate and upload manifest
+        env:
+          TAG_NAME: "dev-wheels"
+          RELEASE_TITLE: "dev-wheels"
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          for f in dist/*.whl; do
+            [ -e "$f" ] || continue
+            gcloud artifacts generic upload \
+              --project="oss-exit-gate-prod" \
+              --location="us" \
+              --repository="wave--githubreleases" \
+              --package="wave" \
+              --version="${VERSION}" \
+              --source="$f"
+          done
+          cat <<EOF > manifest.json
+          {
+            "packages": [
+              {
+                "name": "wave",
+                "version": "${VERSION}",
+                "release_title": "${RELEASE_TITLE}"
+              }
+            ]
+          }
+          EOF
+          gcloud storage cp manifest.json \
+            "gs://oss-exit-gate-prod-projects-bucket/wave/githubreleases/manifests/manifest-${VERSION}-${RUN_ID}-${RUN_ATTEMPT}.json"
 
   # Tagged/stable release
   release_tag:
@@ -181,6 +228,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Download wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -189,13 +237,60 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Release python wheels (tagged stable)
-        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
+      - name: Authenticate to Google Cloud (OSS Exit Gate)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
-          artifacts: dist/*.whl
-          tag: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          body: "Release wheels for ${{ github.ref_name }}."
-          allowUpdates: true
-          replacesArtifacts: true
-          makeLatest: true
+          project_id: 'oss-exit-gate-prod'
+          workload_identity_provider: 'projects/305452601764/locations/global/workloadIdentityPools/builders/providers/github'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+
+      - name: Clean up stale releases from staging repo
+        run: |
+          packages=$(gcloud artifacts packages list \
+              --project="oss-exit-gate-prod" \
+              --location="us" \
+              --repository="wave--githubreleases" \
+              --format="value(name)" 2>/dev/null)
+          echo "${packages}" | xargs -r -I {} sh -c '
+              package_name=$(basename "{}")
+              echo "Deleting package: $package_name..."
+              gcloud artifacts packages delete "{}" \
+                  --project="oss-exit-gate-prod" \
+                  --location="us" \
+                  --repository="wave--githubreleases" \
+                  --quiet
+          '
+
+      - name: Stage release artifacts to OSS Exit Gate and upload manifest
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          RELEASE_TITLE: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          for f in dist/*.whl; do
+            [ -e "$f" ] || continue
+            gcloud artifacts generic upload \
+              --project="oss-exit-gate-prod" \
+              --location="us" \
+              --repository="wave--githubreleases" \
+              --package="wave" \
+              --version="${VERSION}" \
+              --source="$f"
+          done
+          cat <<EOF > manifest.json
+          {
+            "packages": [
+              {
+                "name": "wave",
+                "version": "${VERSION}",
+                "release_title": "${RELEASE_TITLE}"
+              }
+            ]
+          }
+          EOF
+          gcloud storage cp manifest.json \
+            "gs://oss-exit-gate-prod-projects-bucket/wave/githubreleases/manifests/manifest-${VERSION}-${RUN_ID}-${RUN_ATTEMPT}.json"
